@@ -1,7 +1,7 @@
 const bcrypt = require('bcrypt');
 const { Usuario } = require('../models');
 const { generarToken } = require('../utils/jwt');
-const { Op } = require('sequelize');
+const { validarRegistro } = require('../utils/validaciones');
 
 const MAX_INTENTOS = 5;
 const VENTANA_MINUTOS = 10;
@@ -16,6 +16,12 @@ async function registrar(req, res) {
     return res.status(400).json({
       error: 'Todos los campos son obligatorios: nombre, correo, telefono y contrasena',
     });
+  }
+
+  // Formato de correo, teléfono de 10 dígitos y contraseña mínima de 8 con un número.
+  const { valido, errores } = validarRegistro({ nombre, correo, telefono, contrasena });
+  if (!valido) {
+    return res.status(400).json({ error: Object.values(errores)[0], errores });
   }
 
   const existente = await Usuario.findOne({ where: { correo } });
