@@ -89,8 +89,6 @@ Por dentro, esto lo hace un endpoint nuevo `POST /api/uploads` (solo admin, con 
 
 ⚠️ A diferencia de las imágenes en `frontend/public/` (que quedan incluidas en el build del frontend), las fotos subidas por este botón viven en `backend/uploads/` y solo se ven mientras el backend esté prendido y esa carpeta exista — si vas a entregar/mover el proyecto, no olvides copiar también `backend/uploads/` (o volver a subir las fotos).
 
-Nota: el campo del formulario ahora es un selector de archivo (ya no hay campo de texto para pegar una ruta o link a mano), así que la forma de poner una foto es siempre eligiendo el archivo. Si en algún momento quieres apuntar a una imagen que ya vive en `frontend/public/eventos/` o `frontend/public/puntos/` (por ejemplo para no duplicar fotos), se puede seguir haciendo por API/base de datos directamente (`imagen_url = '/eventos/tu-foto.jpg'`), pero desde la interfaz del panel el flujo normal es subir el archivo.
-
 ## Endpoints del Módulo 4 (citas)
 
 | Método | Ruta                 | Descripción                                            | Protegida |
