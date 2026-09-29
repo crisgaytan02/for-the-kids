@@ -3,7 +3,7 @@
 Equipo Tlaxcala — Calidad de Software, ciclo 2026B
 Gaytán Barrios Cristóbal Jair · Diego Flores Murillo · Fátima Isabel Pérez Torres · Ian Santiago Basilio Ramos
 
-Este repo arranca justo donde se quedó el SRS: ya no es puro documento, ya es el sistema tomando forma. Vamos avanzando por módulos, siguiendo el orden del Gantt de la Entrega 1 (Versión 1), con fecha límite el **29 de septiembre de 2026**.
+Vamos avanzando por módulos, siguiendo el orden del Gantt de la Entrega 1 (Versión 1), con fecha límite el **29 de septiembre de 2026**.
 
 ## Estado actual
 
