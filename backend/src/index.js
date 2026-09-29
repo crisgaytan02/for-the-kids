@@ -15,8 +15,21 @@ process.on('uncaughtException', (error) => {
 });
 
 const app = express();
-app.use(cors());
+
+// No revelar en las respuestas que el servidor usa Express (encabezado X-Powered-By).
+app.disable('x-powered-by');
+
+// Solo el frontend del proyecto puede consumir la API. En .env se pueden poner
+// varios orígenes separados por coma, p. ej. CORS_ORIGIN=http://localhost:5173,https://forthekids.vercel.app
+const origenesPermitidos = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origen) => origen.trim());
+app.use(cors({ origin: origenesPermitidos }));
 app.use(express.json());
+// Documentación de la API (Swagger)
+   const swaggerUi = require('swagger-ui-express');
+   const openapi = require('./docs/openapi.json');
+   app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 
 // Fotos subidas de eventos/puntos de recoleccion (ver middleware/upload.middleware.js)
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
