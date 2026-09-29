@@ -1,6 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 // Carpeta fisica donde quedan las fotos subidas (fuera de src/, junto al backend).
 const CARPETA_UPLOADS = path.join(__dirname, '..', '..', 'uploads');
@@ -12,7 +13,8 @@ const almacenamiento = multer.diskStorage({
   destination: (req, file, cb) => cb(null, CARPETA_UPLOADS),
   filename: (req, file, cb) => {
     const extension = path.extname(file.originalname).toLowerCase();
-    const nombreUnico = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
+    // crypto.randomUUID() es aleatorio seguro; Math.random() es predecible.
+    const nombreUnico = `${Date.now()}-${crypto.randomUUID()}${extension}`;
     cb(null, nombreUnico);
   },
 });
