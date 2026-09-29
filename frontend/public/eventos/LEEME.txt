@@ -1,0 +1,9 @@
+Pon aqui las fotos de tus eventos (jpg o png).
+
+Ejemplo: si copias "campana-cucei.jpg" en esta misma carpeta, en el
+campo "URL de la imagen" del formulario de crear evento (panel de admin)
+escribe:
+
+/eventos/campana-cucei.jpg
+
+Eso basta, no necesitas subirla a ningun sitio externo.

@@ -1,0 +1,9 @@
+Pon aqui las fotos de tus puntos de recoleccion (jpg o png).
+
+Ejemplo: si copias "cucei-entrada.jpg" en esta misma carpeta, en el
+campo "URL de la imagen" del formulario de crear punto (panel de admin)
+escribe:
+
+/puntos/cucei-entrada.jpg
+
+Eso basta, no necesitas subirla a ningun sitio externo.
