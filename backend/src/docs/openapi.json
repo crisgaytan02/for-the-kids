@@ -1,0 +1,106 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "For The Kids API - Módulo de Autenticación",
+    "version": "1.0.0",
+    "description": "Registro, inicio de sesión y control de acceso por rol (RF-01, RF-02, RF-14). Equipo Tlaxcala, Calidad de Software 2026B."
+  },
+  "servers": [{ "url": "http://localhost:4000", "description": "Local" }],
+  "tags": [{ "name": "Autenticación", "description": "HU-01 a HU-04 del Sprint 1" }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string", "example": "Credenciales inválidas" } }
+      },
+      "Usuario": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "example": 14 },
+          "nombre": { "type": "string", "example": "Ana López" },
+          "correo": { "type": "string", "example": "ana@correo.com" },
+          "rol": { "type": "string", "enum": ["donante", "admin"], "example": "donante" }
+        }
+      },
+      "Registro": {
+        "type": "object",
+        "required": ["nombre", "correo", "telefono", "contrasena"],
+        "properties": {
+          "nombre": { "type": "string", "example": "Ana López" },
+          "correo": { "type": "string", "format": "email", "example": "ana@correo.com" },
+          "telefono": { "type": "string", "description": "10 dígitos; se aceptan espacios o guiones", "example": "3312345678" },
+          "contrasena": { "type": "string", "description": "Mínimo 8 caracteres y al menos un número", "example": "Donar2026" }
+        }
+      },
+      "Login": {
+        "type": "object",
+        "required": ["correo", "contrasena"],
+        "properties": {
+          "correo": { "type": "string", "example": "ana@correo.com" },
+          "contrasena": { "type": "string", "example": "Donar2026" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/api/auth/registro": {
+      "post": {
+        "tags": ["Autenticación"],
+        "summary": "Registrar un donante (HU-01 / RF-01)",
+        "description": "Crea una cuenta con rol donante. La contraseña se guarda como hash bcrypt (costo 10).",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Registro" } } } },
+        "responses": {
+          "201": { "description": "Cuenta creada", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Usuario" } } } },
+          "400": { "description": "Falta un campo o tiene formato inválido", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "El correo ya está registrado", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": ["Autenticación"],
+        "summary": "Iniciar sesión (HU-02, HU-03 / RF-02)",
+        "description": "Regresa un JWT con vigencia de 24 h. Tras 5 intentos fallidos en 10 minutos la cuenta se bloquea 15 minutos.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Login" } } } },
+        "responses": {
+          "200": {
+            "description": "Credenciales válidas",
+            "content": { "application/json": { "schema": { "type": "object", "properties": {
+              "token": { "type": "string", "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." },
+              "usuario": { "$ref": "#/components/schemas/Usuario" }
+            } } } }
+          },
+          "400": { "description": "Falta el correo o la contraseña", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "401": { "description": "Credenciales inválidas (mismo mensaje si el correo no existe)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "423": { "description": "Cuenta bloqueada temporalmente", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/auth/perfil": {
+      "get": {
+        "tags": ["Autenticación"],
+        "summary": "Datos del usuario autenticado",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Datos del usuario", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Usuario" } } } },
+          "401": { "description": "Sin token, token expirado o firma alterada", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/auth/solo-admin": {
+      "get": {
+        "tags": ["Autenticación"],
+        "summary": "Ruta de ejemplo solo para administradores (HU-04 / RF-14)",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": { "description": "El usuario es administrador" },
+          "401": { "description": "Sin token o token inválido", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "403": { "description": "El usuario no es administrador", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    }
+  }
+}

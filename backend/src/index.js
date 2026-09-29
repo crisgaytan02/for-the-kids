@@ -26,6 +26,10 @@ const origenesPermitidos = (process.env.CORS_ORIGIN || 'http://localhost:5173')
   .map((origen) => origen.trim());
 app.use(cors({ origin: origenesPermitidos }));
 app.use(express.json());
+// Documentación de la API (Swagger)
+   const swaggerUi = require('swagger-ui-express');
+   const openapi = require('./docs/openapi.json');
+   app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openapi));
 
 // Fotos subidas de eventos/puntos de recoleccion (ver middleware/upload.middleware.js)
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
