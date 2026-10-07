@@ -1,200 +1,221 @@
-# For The Kids · Sistema de Gestión de Campaña de Donación de Cabello
+# For The Kids 💛
 
-**Equipo Tlaxcala** · Calidad de Software, ciclo 2026B
-Gaytán Barrios Cristóbal Jair · Flores Murillo Diego · Pérez Torres Fátima Isabel · Basilio Ramos Ian Santiago
+Sistema de gestión para la campaña de donación de cabello **For The Kids**. Lo hicimos para la materia de **Calidad de Software** (CUCEI, ciclo 2026B) con la profesora Zoila Liliana Herrera Luján.
 
-Este es el repositorio de nuestro proyecto. Lo fuimos armando por módulos, en el mismo orden que pusimos en el Gantt de la Entrega 1 (Versión 1), que se entrega el **29 de septiembre de 2026**.
+La idea es simple: que la gente encuentre un evento, agende su cita sin pelearse por el lugar y reciba sus correos de confirmación y recordatorio. Del otro lado, el equipo organizador tiene todo (citas, donaciones de cabello, reportes) en un solo panel, en vez de hojas de cálculo y mensajes de WhatsApp.
 
-## ¿Cómo vamos?
+**Equipo Tlaxcala**
 
-- [x] **Módulo 1. Base y entorno:** estructura del repo, modelo relacional en PostgreSQL (`database/schema.sql`) y el esqueleto del backend con Express + Sequelize.
-- [x] **Módulo 2. Usuarios y autenticación** (RF-01, RF-02, RF-14): registro, login con JWT, bloqueo por intentos fallidos y rutas protegidas por rol.
-- [x] **Módulo 3. Eventos y puntos de recolección** (RF-03, RF-04, RF-12): consulta pública y CRUD para el admin (las bajas son lógicas, no se borra nada).
-- [x] **Módulo 4. Citas** (RF-05 a RF-09): agendar validando el cupo aunque lleguen varias solicitudes al mismo tiempo, cancelar (con una regla extra que explicamos más abajo), correos de confirmación y cancelación, y recordatorio automático.
-- [x] **Módulo 5. Donaciones e historial** (RF-10, RF-11): el admin registra la donación sobre una cita atendida y el donante la ve en su historial.
-- [x] **Módulo 6. Reportes** (RF-13): número de citas, donaciones y eventos activos, con filtro por fechas o por evento.
-- [x] **Frontend (React + Vite):** sitio público para donantes y panel de administración.
+| Integrante | Rol | Módulos que trabajó |
+|---|---|---|
+| Cristóbal Jair Gaytán Barrios | Backend y BD | Modelo relacional, API REST, citas con validación de cupo, recordatorios por correo |
+| Fátima Isabel Pérez Torres | QA y Frontend | Registro/login, correos de confirmación, pruebas |
+| Ian Santiago Basilio Ramos | Frontend y requisitos | Eventos, puntos de recolección, historial, panel de reportes |
+| Diego Flores Murillo | Fullstack y DevOps | Base del panel admin, registro de donaciones, CI/CD |
 
-## Cómo correr el proyecto
+---
 
-### Base de datos
+## Stack
 
-1. Crean una base de datos vacía en PostgreSQL, por ejemplo `for_the_kids`.
-2. Cargan el esquema:
-   ```bash
-   psql -U postgres -d for_the_kids -f database/schema.sql
-   ```
-3. Si ya tenían la base de una versión anterior, corran también las migraciones que les falten, en este orden:
+- **Frontend:** React 18 + Vite + React Router. CSS propio, sin librerías de UI, para que quedara igual al Figma.
+- **Backend:** Node.js + Express (API REST), JWT para sesiones y bcrypt para contraseñas.
+- **Base de datos:** PostgreSQL (la administramos con pgAdmin).
+- **Correos:** Nodemailer con SMTP (Gmail o el correo del hosting).
+- **Recordatorios:** node-cron.
+- **PDF:** pdfkit para exportar el reporte por periodo.
 
-   | Migración | Qué agrega |
-   |-----------|------------|
-   | `002_auth_lockout.sql` | Columna para la ventana de intentos fallidos del login |
-   | `003_citas_recordatorio.sql` | Control de recordatorios de citas |
-   | `004_longitud_y_cancelacion.sql` | `longitud_cm` en donaciones y columnas para cancelaciones tardías |
-   | `005_imagenes.sql` | `imagen_url` (opcional) en eventos y puntos de recolección |
-
-   Todas están en `database/migrations/`.
-
-### Backend
-
-1. Dentro de `backend/`, copien `.env.example` como `.env` y llenen los datos de conexión. **El `.env` nunca se sube al repo** (ya está en el `.gitignore`).
-2. Instalen y levanten el servidor:
-   ```bash
-   cd backend
-   npm install
-   npm run dev
-   ```
-3. Para confirmar que todo está conectado, abran `http://localhost:4000/api/health`. Debe regresar `{ "status": "ok", "db": "conectada" }`.
-
-### Frontend
-
-1. En otra terminal (con el backend corriendo), entren a `frontend/` y corran `npm install`.
-2. Luego `npm run dev`.
-3. Abran la URL que les aparezca, normalmente `http://localhost:5173`.
-
-El frontend se conecta a `http://localhost:4000/api`, por eso el backend tiene que estar prendido al mismo tiempo.
-
-### Correos (RF-08 y RF-09)
-
-Para que los correos salgan de verdad hay que poner `EMAIL_USER` y `EMAIL_PASSWORD` en el `.env` (con Gmail se usa una "contraseña de aplicación"). Si no se llenan, el sistema funciona igual, solo que el correo no se manda y el error queda en la consola del backend. Eso lo dejamos así a propósito, porque RF-08 pide registrar todos los fallos de envío.
-
-Los recordatorios salen solos: al arrancar el servidor se programa una tarea que cada hora revisa qué citas caen entre 20 y 24 horas después. En consola aparece `[Recordatorios] job programado cada hora`.
-
-## Estructura del proyecto
+Todo es **un solo proyecto con un solo `package.json`**. Express sirve la API y también la página, así que basta un comando y un puerto.
 
 ```
 for-the-kids/
-├── database/
-│   ├── schema.sql          # Modelo relacional (usuarios, eventos, puntos, citas, donaciones)
-│   └── migrations/         # Cambios que se fueron agregando al esquema
-├── backend/
-│   ├── src/
-│   │   ├── config/db.js    # Conexión a PostgreSQL con Sequelize
-│   │   ├── models/         # Un modelo por entidad y sus asociaciones
-│   │   ├── routes/         # Rutas de cada módulo
-│   │   ├── controllers/    # Lógica de cada endpoint
-│   │   └── middleware/     # Autenticación, validación de rol, etc.
-│   ├── uploads/            # Fotos subidas desde el panel (se crea sola)
-│   └── index.js
-└── frontend/               # React + Vite
+├── package.json          # dependencias y comandos de todo el proyecto
+├── vite.config.js
+├── .env.example          # copia como .env y llénalo
+├── client/
+│   ├── index.html
+│   ├── public/           # logo, íconos, hero, fondo de login y fotos de eventos
+│   └── src/
+│       ├── main.jsx          # rutas, layouts (público y admin) y rutas protegidas
+│       ├── core.jsx          # cliente de la API, sesión, useFetch y formatos
+│       ├── ui.jsx            # componentes, gráficas, calendario, aviso de privacidad, marco de login
+│       ├── paginas-sitio.jsx # inicio, eventos, puntos, login, registro, mis citas, mis donaciones, perfil
+│       ├── paginas-admin.jsx # dashboard, eventos, citas, donaciones, donantes, puntos, notificaciones, configuración
+│       └── estilos.css
+└── server/
+    ├── index.js          # arranque del servidor (API + página)
+    ├── core.js           # configuración, BD, validaciones, sesión, correos, recordatorios y PDF
+    ├── api.js            # todas las rutas de la API
+    ├── schema.sql        # tablas de la base de datos
+    ├── seed.js           # crea las tablas y carga los datos de la campaña
+    ├── api.test.js       # pruebas de integración
+    └── assets/logo.png   # logo que va dentro de los correos
 ```
 
-## Endpoints
+Cada archivo está dividido en módulos marcados así: `// ===== Módulo: Login =====`.
 
-### Módulo 2 · Autenticación
+---
 
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| POST | /api/auth/registro | Crea un usuario nuevo (por default con rol donante) | No |
-| POST | /api/auth/login | Regresa un JWT si el correo y la contraseña son correctos | No |
-| GET | /api/auth/perfil | Datos del usuario que inició sesión | Sí |
-| GET | /api/auth/solo-admin | Ruta de ejemplo que solo deja pasar al admin | Sí (admin) |
+## Cómo correrlo en local (Windows + VS Code)
 
-Para probar como administrador hay que darle el rol a mano en la base:
-```sql
-UPDATE usuarios SET rol = 'admin' WHERE correo = 'tu_correo@ejemplo.com';
-```
+Necesitas **Node 22 LTS** y **PostgreSQL 16 con pgAdmin**.
 
-### Módulo 3 · Eventos y puntos de recolección
+1. Abre la carpeta del proyecto en VS Code y abre una terminal (`Ctrl + ñ`).
+2. Instala las dependencias:
+   ```bash
+   npm install
+   ```
+3. Copia `.env.example` como `.env` (en la raíz del proyecto). Pon tu contraseña de Postgres en `DATABASE_URL` y cambia `JWT_SECRET` por cualquier texto largo.
+4. En pgAdmin crea la base `forthekids` (clic derecho en *Databases → Create → Database*). Si no la creas, el siguiente paso intenta crearla solo.
+5. Crea las tablas y carga los datos:
+   ```bash
+   npm run db:init
+   ```
+6. Levanta todo:
+   ```bash
+   npm run dev
+   ```
+7. Abre **http://localhost:4000**.
 
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| GET | /api/eventos | Lista los eventos activos | No |
-| POST | /api/eventos | Crea un evento (no acepta cupo de 0 o menos) | Sí (admin) |
-| PUT | /api/eventos/:id | Edita un evento | Sí (admin) |
-| DELETE | /api/eventos/:id | Da de baja un evento (baja lógica) | Sí (admin) |
-| GET | /api/puntos | Lista los puntos de recolección activos | No |
-| POST | /api/puntos | Crea un punto de recolección | Sí (admin) |
-| PUT | /api/puntos/:id | Edita un punto | Sí (admin) |
-| DELETE | /api/puntos/:id | Da de baja un punto | Sí (admin) |
-| POST | /api/uploads | Sube una foto para un evento o punto | Sí (admin) |
+Con `npm run dev` los cambios del front se ven al guardar, y el servidor se reinicia solo cuando cambias algo en `server/`.
 
-**Fotos de eventos y puntos:** al crear un evento o punto desde el panel, en "Foto (opcional)" eligen la imagen de su compu y se sube en ese momento (sale "Subiendo imagen…" y luego la vista previa). Si no suben nada, se muestra el diseño de colores que trae por default.
+### Cuentas
 
-Solo se aceptan jpg, png, webp y gif de hasta 5 MB. Las fotos se guardan en `backend/uploads/` y el backend las sirve en `http://localhost:4000/uploads/...`.
+- **Administrador:** Cristóbal Gaytán · `jairgaytan339@gmail.com`
+- **Donantes:** las 28 cuentas con sus contraseñas están al inicio de `server/seed.js`.
 
-> **Ojo:** esas fotos solo existen en la compu donde se subieron. Si mueven o entregan el proyecto, copien también `backend/uploads/` o vuelvan a subirlas.
+Toda la actividad del seed (registros, eventos, citas y donaciones) cae entre el **12 de septiembre y el 1 de octubre de 2026**. Los eventos próximos se registraron en esas fechas, pero se calculan a partir del día en que corres el seed para que siempre haya fechas para agendar.
 
-### Módulo 4 · Citas
+---
 
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| POST | /api/citas | Agenda una cita (body: `{ evento_id }`) | Sí |
-| DELETE | /api/citas/:id | Cancela una cita (ver la regla de abajo) | Sí |
-| GET | /api/citas/mis-citas | Citas del usuario que inició sesión | Sí |
-| GET | /api/citas/solicitudes-cancelacion | Cancelaciones tardías pendientes | Sí (admin) |
-| PATCH | /api/citas/:folio/aprobar-cancelacion | Aprueba la cancelación y libera el cupo | Sí (admin) |
-| PATCH | /api/citas/:folio/rechazar-cancelacion | Rechaza la cancelación; la cita sigue en pie | Sí (admin) |
+## Correos (confirmación, reprogramación, cancelación y recordatorio)
 
-**Regla que agregamos para las cancelaciones:** si el donante cancela con 24 horas o más de anticipación, se cancela directo. Si faltan menos de 24 horas, la cancelación queda como "solicitud pendiente" y un admin la tiene que aprobar (se libera el cupo) o rechazar (la cita sigue agendada) desde la pestaña "Solicitudes de cancelación".
+El sistema manda correo cuando:
 
-Esto no venía en el SRS: ahí RF-07 habla de una ventana de 12 horas. Lo decidimos en equipo porque las cancelaciones de último momento dejan lugares vacíos que nadie alcanza a ocupar. Nos falta actualizar el SRS y el documento de Requerimientos Medibles para que coincidan con el código.
+| Momento | Quién lo recibe |
+|---|---|
+| Se agenda una cita | El donante, con folio, fecha, hora y lugar |
+| Se reprograma una cita | El donante, con el nuevo horario |
+| El donante cancela su cita | El donante |
+| El admin cancela una cita | El donante, avisando que la canceló el equipo |
+| El admin da de baja un evento con citas | Todos los donantes con cita activa en ese evento |
+| Faltan 20–24 h para la cita | El donante (recordatorio; el servidor revisa cada 15 min) |
 
-### Módulo 5 · Donaciones
+### Configurarlo con Gmail
 
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| PATCH | /api/citas/:folio/atender | Marca una cita "agendada" como "atendida" | Sí (admin) |
-| POST | /api/donaciones | Registra una donación. Body: `{ folio, longitud_cm, notas }` | Sí (admin) |
-| GET | /api/donaciones/mis-donaciones | Historial del usuario que inició sesión | Sí |
-| GET | /api/donaciones | Todas las donaciones | Sí (admin) |
+1. Entra a tu cuenta de Google → **Seguridad** → activa la **Verificación en dos pasos**.
+2. Busca **Contraseñas de aplicaciones** (myaccount.google.com/apppasswords), crea una llamada "For The Kids" y copia las 16 letras.
+3. En el `.env`:
+   ```
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=465
+   SMTP_USER=tu-correo@gmail.com
+   SMTP_PASS=las16letrassinespacios
+   MAIL_FROM="For The Kids <tu-correo@gmail.com>"
+   ```
+4. Reinicia `npm run dev`. En la terminal debe salir `📬 Correo listo`.
+5. En el panel, **Configuración → Correo**, manda un correo de prueba. Ahí mismo ves los últimos envíos y si alguno falló.
 
-**Cómo fluye una donación:**
-1. El donante agenda su cita.
-2. El día del evento, el admin la marca como atendida con el **folio**.
-3. El admin registra la donación con ese mismo folio.
-4. El donante ya la ve en su historial.
+Si usan el correo de Hostinger, cambien `SMTP_HOST=smtp.hostinger.com`, con el mismo puerto 465 y su cuenta de correo del dominio.
 
-Usamos el folio de 8 caracteres (el que aparece en "Mis citas" y en los correos) en lugar del id de la base de datos. Al principio pedíamos el id y salía el error `la sintaxis de entrada no es válida para tipo integer`, porque el admin nunca ve ese número en pantalla.
+### Las cuentas del seed no reciben correos reales
 
-`longitud_cm` es obligatoria (número mayor a 0) porque el SRS la pide como dato de entrada en RF-10. Las `notas` son opcionales.
+Los 28 donantes del seed tienen correos inventados que podrían existir. Para no mandarle nada a un desconocido, los correos a esas cuentas **se simulan** (salen en la terminal y en la bitácora como "Simulado"). Si quieren verlos de verdad, pongan su correo en `MAIL_REDIRECT_TO`: todos los correos de cuentas demo les llegarán a ustedes con el asunto `[Para correo-original] …`.
 
-### Módulo 6 · Reportes
+Las cuentas que se registren desde la página sí reciben el correo normal.
 
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| GET | /api/reportes | Citas, donaciones, donantes y eventos activos. Filtros: `?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&evento_id=1` (máximo 90 días) | Sí (admin) |
-| GET | /api/reportes/donaciones-por-mes | Donaciones por mes para la gráfica del dashboard (`?meses=9`) | Sí (admin) |
-| GET | /api/reportes/publico | Totales sin datos personales para la página de inicio | No |
+---
 
-### Panel de administración
-
-| Método | Ruta | Qué hace | Protegida |
-|--------|------|----------|-----------|
-| GET | /api/usuarios | Lista de usuarios (secciones "Donantes" y "Usuarios") | Sí (admin) |
-| GET | /api/citas/todas | Todas las citas (sección "Citas" y dashboard) | Sí (admin) |
-
-## Sobre la interfaz
-
-El panel de admin tiene barra lateral, tarjetas de resumen, gráficas y calendario. El sitio público tiene una portada para los donantes. Usamos verde bosque con ámbar, y las tipografías Fraunces para títulos y Work Sans para el resto.
-
-Casi todo el panel ya muestra datos reales de la base: tarjetas, gráfica de donaciones por mes, estado de citas, calendario, próximas citas, eventos recientes y notificaciones. Lo que todavía es solo de adorno:
-
-- El buscador de arriba (todavía no filtra).
-- Las imágenes de los eventos que no tienen foto subida.
-
-## Reiniciar la base de datos
-
-Si quieren borrar los datos de prueba y empezar de cero, hay un script que vacía las 5 tablas y crea un solo usuario admin:
+## Pruebas
 
 ```bash
-cd backend
-npm run resetear-bd
+npm run db:init   # las pruebas usan los datos del seed
+npm test
 ```
 
-Al terminar, el script muestra en consola el correo y la contraseña del admin. Si quieren otros datos, los pueden pasar así:
+Son 13 pruebas de integración que llaman directo a la API y validan los criterios medibles del SRS, incluyendo concurrencia de cupo, el rango de 20 a 35 cm y el registro de correos.
 
-```bash
-ADMIN_CORREO=otro@correo.com ADMIN_CONTRASENA=OtraClave123 npm run resetear-bd
-```
+---
 
-> **Cuidado:** esto borra TODO (usuarios, eventos, puntos, citas y donaciones). Úsenlo solo si de verdad quieren arrancar de cero, y cambien la contraseña del admin la primera vez que entren.
+## Trazabilidad con los requerimientos
 
-## Lo que nos falta
+| RF | Qué pide (versión medible) | Dónde está | Prueba |
+|---|---|---|---|
+| RF-01 | Registro con campos obligatorios, correo único y consentimiento de datos | `api.js` (Registro) · `paginas-sitio.jsx` | ✅ |
+| RF-02 | JWT de 24 h, bloqueo de 15 min tras 5 intentos en 10 min, redirección por rol | `api.js` (Login) | ✅ |
+| RF-03 | Solo eventos activos y vigentes, con cupo real | `api.js` (Eventos) | ✅ |
+| RF-04 | Puntos con dirección, teléfono y horario, sin login | `api.js` (Puntos de recolección) | ✅ |
+| RF-05 | Folio de 8 caracteres, una sola cita activa por evento | `api.js` (Citas) + índice único parcial | ✅ |
+| RF-06 | 0% de sobrecupo con solicitudes simultáneas | `SELECT … FOR UPDATE` sobre el evento | ✅ |
+| RF-07 | Cancelar o reprogramar hasta 12 h antes y liberar el lugar | `api.js` (Citas) | ✅ |
+| RF-08 | Correo al agendar, reprogramar y cancelar, con bitácora de fallos | `core.js` (Correos) + tabla `log_correos` | ✅ |
+| RF-09 | Recordatorio entre 20 y 24 h antes | `core.js` (Recordatorios) | manual |
+| RF-10 | Donación de cabello (20–35 cm) solo sobre citas atendidas | `api.js` (Donaciones) | ✅ |
+| RF-11 | El donante solo ve sus propias donaciones | `api.js` (Donaciones) | ✅ |
+| RF-12 | CRUD de eventos y puntos, cupos > 0, solo admin | `api.js` (Eventos, Puntos) | ✅ |
+| RF-13 | Reporte de hasta 90 días, en pantalla y en PDF | `api.js` (Reportes) · `core.js` (Reporte PDF) | ✅ |
+| RF-14 | Donante en ruta de admin = 403 | `core.js` (Autenticación) + rutas protegidas en `main.jsx` | ✅ |
 
-Ya están cubiertos los 14 RF del SRS en el backend y hay una interfaz funcional. Nos queda:
+---
 
-- Pulir el diseño con lo que Ian tiene en Figma.
-- Agregar las pruebas automatizadas para el reporte de QA.
-- Actualizar el SRS y los Requerimientos Medibles con la regla de cancelaciones tardías.
-- Preparar la documentación final de la Entrega 1.
+## API (resumen)
+
+Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| POST | `/auth/registro` | Crear cuenta de donante |
+| POST | `/auth/login` | Iniciar sesión |
+| GET | `/auth/yo` 🔒 | Datos de la sesión |
+| GET | `/eventos` | Eventos vigentes |
+| GET | `/eventos/:id` | Detalle con horarios disponibles |
+| GET | `/eventos/admin/todos` 👑 | Todos los eventos con métricas |
+| POST/PUT/DELETE | `/eventos[/:id]` 👑 | Crear, editar o dar de baja (avisa por correo) |
+| POST | `/eventos/imagen` 👑 | Subir imagen (PNG/JPG, máx. 5 MB) |
+| GET | `/puntos` | Puntos activos |
+| POST/PUT/DELETE | `/puntos[/:id]` 👑 | Gestión de puntos |
+| POST | `/citas` 🔒 | Agendar (`{ evento_id, hora }`) |
+| GET | `/citas/mias` 🔒 | Mis citas |
+| PATCH | `/citas/:id/cancelar` 🔒 | Cancelar |
+| PATCH | `/citas/:id/reprogramar` 🔒 | Cambiar de horario |
+| GET | `/citas/admin` 👑 | Todas las citas con filtros |
+| PATCH | `/citas/:id/estado` 👑 | Marcar `atendida` / `no_asistio` |
+| GET | `/donaciones/mias` 🔒 | Historial del donante |
+| GET | `/donaciones` 👑 | Listado (`?estado=&q=`) |
+| POST | `/donaciones` 👑 | Registrar donación (`{ cita_id, largo_cm }`) |
+| PATCH | `/donaciones/:id` 👑 | Cambiar estado |
+| GET | `/reportes/dashboard` 👑 | Métricas, donaciones por mes y largos de cabello |
+| GET | `/reportes?desde=&hasta=` 👑 | Reporte por periodo |
+| GET | `/reportes/pdf?desde=&hasta=` 👑 | El mismo reporte en PDF |
+| GET | `/reportes/donantes` 👑 | Donantes con sus totales |
+| GET | `/reportes/notificaciones` 👑 | Notificaciones del panel |
+| GET | `/correo/estado` 👑 | Conexión SMTP y últimos envíos |
+| POST | `/correo/prueba` 👑 | Manda un correo de prueba |
+
+---
+
+## Decisiones que tomamos
+
+- **Solo cabello.** La campaña es de donación de cabello, así que quitamos los tipos de donación: cada donación guarda su largo en cm (20 a 35).
+- **El cupo se valida con un candado en la fila del evento** (`FOR UPDATE`). Primero lo hicimos solo con `COUNT(*)` y en la prueba de concurrencia se colaban dos citas.
+- **"Una cita activa por evento" también vive en la BD**, como índice único parcial.
+- **Personas beneficiadas = donaciones completadas.** Es la estimación que acordamos para la V1.
+- **Los porcentajes del dashboard comparan los últimos 30 días contra los 30 anteriores**, porque con mes calendario todo salía en 0% a principio de mes.
+- **Las gráficas son SVG hechos a mano**; Chart.js agregaba ~200 kb por dos gráficas.
+
+## Pendientes para la V2
+
+- Recuperar contraseña por correo.
+- Recordatorios por WhatsApp.
+
+---
+
+## Despliegue
+
+En producción Express sirve la página compilada (`client/dist`), así que todo se sube junto:
+
+- **Build:** `npm install && npm run build`
+- **Start:** `npm start` (archivo de entrada: `server/index.js`)
+- **Variables:** `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL` (la URL pública), `APP_TZ=America/Mexico_City` y las `SMTP_*` para los correos.
+- Después del primer despliegue se corre una vez `npm run db:init` (borra y vuelve a crear las tablas).
+
+Sirve igual en Render + Neon o en Hostinger (plan Business/Cloud con Node.js) + Neon. Las imágenes que sube el admin se guardan en `server/uploads`; en hostings con disco temporal se pierden al redeplegar.

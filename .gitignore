@@ -1,5 +1,6 @@
 node_modules/
+client/dist/
+server/uploads/
 .env
-coverage/
-dist/
-build/
+*.log
+.DS_Store
