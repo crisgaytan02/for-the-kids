@@ -1,7 +1,4 @@
-# For The Kids 💛
-
-Sistema de gestión para la campaña de donación de cabello **For The Kids**. Lo hicimos para la materia de **Calidad de Software** (CUCEI, ciclo 2026B) con la profesora Zoila Liliana Herrera Luján.
-
+# For The Kids
 La idea es simple: que la gente encuentre un evento, agende su cita sin pelearse por el lugar y reciba sus correos de confirmación y recordatorio. Del otro lado, el equipo organizador tiene todo (citas, donaciones de cabello, reportes) en un solo panel, en vez de hojas de cálculo y mensajes de WhatsApp.
 
 **Equipo Tlaxcala**
@@ -50,10 +47,6 @@ for-the-kids/
     ├── api.test.js       # pruebas de integración
     └── assets/logo.png   # logo que va dentro de los correos
 ```
-
-Cada archivo está dividido en módulos marcados así: `// ===== Módulo: Login =====`.
-
----
 
 ## Cómo correrlo en local (Windows + VS Code)
 
@@ -114,8 +107,6 @@ El sistema manda correo cuando:
    ```
 4. Reinicia `npm run dev`. En la terminal debe salir `📬 Correo listo`.
 5. En el panel, **Configuración → Correo**, manda un correo de prueba. Ahí mismo ves los últimos envíos y si alguno falló.
-
-Si usan el correo de Hostinger, cambien `SMTP_HOST=smtp.hostinger.com`, con el mismo puerto 465 y su cuenta de correo del dominio.
 
 ### Las cuentas del seed no reciben correos reales
 
@@ -195,7 +186,6 @@ Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador
 
 ## Decisiones que tomamos
 
-- **Solo cabello.** La campaña es de donación de cabello, así que quitamos los tipos de donación: cada donación guarda su largo en cm (20 a 35).
 - **El cupo se valida con un candado en la fila del evento** (`FOR UPDATE`). Primero lo hicimos solo con `COUNT(*)` y en la prueba de concurrencia se colaban dos citas.
 - **"Una cita activa por evento" también vive en la BD**, como índice único parcial.
 - **Personas beneficiadas = donaciones completadas.** Es la estimación que acordamos para la V1.
@@ -205,7 +195,6 @@ Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador
 ## Pendientes para la V2
 
 - Recuperar contraseña por correo.
-- Recordatorios por WhatsApp.
 
 ---
 
@@ -217,5 +206,3 @@ En producción Express sirve la página compilada (`client/dist`), así que todo
 - **Start:** `npm start` (archivo de entrada: `server/index.js`)
 - **Variables:** `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL` (la URL pública), `APP_TZ=America/Mexico_City` y las `SMTP_*` para los correos.
 - Después del primer despliegue se corre una vez `npm run db:init` (borra y vuelve a crear las tablas).
-
-Sirve igual en Render + Neon o en Hostinger (plan Business/Cloud con Node.js) + Neon. Las imágenes que sube el admin se guardan en `server/uploads`; en hostings con disco temporal se pierden al redeplegar.
