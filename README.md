@@ -1,4 +1,4 @@
-# For The Kids 💛
+# For The Kids
 
 Sistema de gestión para la campaña de donación de cabello **For The Kids**. Lo hicimos para la materia de **Calidad de Software** (CUCEI, ciclo 2026B) con la profesora Zoila Liliana Herrera Luján.
 
