@@ -64,17 +64,11 @@ export function Badge({ estado, children }) {
   return <span className={`badge badge--${color}`}>{children || texto}</span>;
 }
 
-export function Metric({ icon: Icon, label, value, delta, deltaLabel }) {
-  const negativo = typeof delta === 'number' && delta < 0;
+export function Metric({ icon: Icon, label, value, deltaLabel }) {
   return (
     <div className="metric">
       <div className="metric__top">
         <span className="metric__icon">{Icon && <Icon size={19} aria-hidden />}</span>
-        {delta !== undefined && delta !== null && (
-          <span className={`metric__delta ${negativo ? 'neg' : ''}`}>
-            {typeof delta === 'number' ? `${delta > 0 ? '+' : ''}${delta}%` : delta}
-          </span>
-        )}
       </div>
       <span className="metric__label">{label}</span>
       <span className="metric__value">{value}</span>
@@ -581,7 +575,7 @@ export function AuthShell({ titulo, texto, children }) {
     <div className="auth">
       <aside className="auth__side">
         <Link to="/" className="auth__logo">
-          <Logo height={44} />
+          <Logo height={58} />
         </Link>
         <div className="auth__copy">
           <h1
@@ -604,7 +598,7 @@ export function AuthShell({ titulo, texto, children }) {
               marginBottom: 8,
             }}
           >
-            <Logo height={40} />
+            <Logo height={50} />
           </Link>
           {children}
         </div>

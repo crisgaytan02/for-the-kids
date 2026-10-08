@@ -170,15 +170,15 @@ const remitente = () =>
 
 export async function verificarCorreo() {
   if (!correoConfigurado()) {
-    console.log('📭 Correo sin configurar: los correos se simulan en esta consola (llena SMTP_* en el .env).');
+    console.log('Correo sin configurar: los correos se simulan en esta consola (llena SMTP_* en el .env).');
     return { ok: false, simulado: true };
   }
   try {
     await transporte().verify();
-    console.log(`📬 Correo listo: ${process.env.SMTP_HOST} como ${process.env.SMTP_USER}`);
+    console.log(`Correo listo: ${process.env.SMTP_HOST} como ${process.env.SMTP_USER}`);
     return { ok: true };
   } catch (err) {
-    console.error(`❌ No se pudo conectar al servidor de correo (${process.env.SMTP_HOST}): ${err.message}`);
+    console.error(`No se pudo conectar al servidor de correo (${process.env.SMTP_HOST}): ${err.message}`);
     return { ok: false, error: err.message };
   }
 }
@@ -209,7 +209,7 @@ function plantilla({ titulo, intro, cita, cierre, boton }) {
   const btn = boton
     ? `<p style="margin:22px 0"><a href="${boton.url}" style="background:#F9C62D;color:#172033;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:999px;display:inline-block">${boton.texto}</a></p>`
     : '';
-  const logo = fs.existsSync(LOGO) ? '<img src="cid:logo-ftk" alt="For The Kids" height="40" style="display:block;margin-bottom:18px">' : '<strong>FOR THE KIDS ♡</strong>';
+  const logo = fs.existsSync(LOGO) ? '<img src="cid:logo-ftk" alt="For The Kids" height="56" style="display:block;margin-bottom:18px">' : '<strong>FOR THE KIDS 💛</strong>';
   return `<div style="font-family:Arial,Helvetica,sans-serif;background:#FFFDF7;padding:28px 12px">
     <div style="max-width:540px;margin:auto;background:#ffffff;border-radius:20px;padding:28px;border:1px solid #F3E7BF">
       ${logo}
@@ -239,7 +239,7 @@ export async function enviarCorreo({ para, asunto, contenido, tipo }) {
   const esDemo = Boolean(rows[0]?.es_demo);
   const redireccion = process.env.MAIL_REDIRECT_TO;
   const destino = esDemo && redireccion ? redireccion : para;
-  const simulado = !correoConfigurado() || (esDemo && !redireccion);
+  const simulado = process.env.NODE_ENV === 'test' || !correoConfigurado() || (esDemo && !redireccion);
   const mensaje = {
     from: remitente(),
     to: destino,
@@ -250,11 +250,11 @@ export async function enviarCorreo({ para, asunto, contenido, tipo }) {
   };
   try {
     await (simulado ? nodemailer.createTransport({ jsonTransport: true }) : transporte()).sendMail(mensaje);
-    if (process.env.NODE_ENV !== 'test') console.log(`📧 ${simulado ? '[simulado] ' : ''}${tipo} → ${destino} | ${mensaje.subject}`);
+    if (process.env.NODE_ENV !== 'test') console.log(`${simulado ? '[simulado] ' : ''}${tipo} → ${destino} | ${mensaje.subject}`);
     await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, simulado) VALUES ($1,$2,$3,TRUE,$4)', [destino, mensaje.subject, tipo, simulado]);
     return { ok: true, simulado, destino };
   } catch (err) {
-    console.error(`❌ Falló el correo (${tipo}) a ${destino}: ${err.message}`);
+    console.error(`Falló el correo (${tipo}) a ${destino}: ${err.message}`);
     await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, error) VALUES ($1,$2,$3,FALSE,$4)', [destino, mensaje.subject, tipo, err.message]).catch(() => {});
     return { ok: false, error: err.message };
   }
@@ -351,7 +351,7 @@ export async function enviarRecordatoriosPendientes() {
       enviados++;
     }
   }
-  if (rows.length) console.log(`⏰ Recordatorios: ${enviados} de ${rows.length} enviados`);
+  if (rows.length) console.log(`Recordatorios: ${enviados} de ${rows.length} enviados`);
   return { revisadas: rows.length, enviados };
 }
 
@@ -360,7 +360,7 @@ export function iniciarRecordatorios() {
   const correr = () => enviarRecordatoriosPendientes().catch((err) => console.error('Recordatorios:', err.message));
   cron.schedule('*/15 * * * *', correr);
   setTimeout(correr, 5000);
-  console.log('⏰ Recordatorios activos (revisa cada 15 minutos)');
+  console.log('Recordatorios activos (revisa cada 15 minutos)');
 }
 
 // ===== Módulo: Reporte PDF =====

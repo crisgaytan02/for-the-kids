@@ -429,14 +429,6 @@ p {
   background: var(--amarillo-suave);
   color: var(--noche);
 }
-.metric__delta {
-  font-size: 0.76rem;
-  font-weight: 600;
-  color: #1f8a57;
-}
-.metric__delta.neg {
-  color: #c4363b;
-}
 .metric__label {
   font-size: 0.82rem;
   color: var(--tx-2);

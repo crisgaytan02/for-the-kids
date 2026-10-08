@@ -84,7 +84,7 @@ async function asegurarBaseDeDatos() {
     await admin.connect();
     await admin.query(`CREATE DATABASE "${nombre.replace(/"/g, '')}"`);
     await admin.end();
-    console.log(`🆕 Creamos la base de datos "${nombre}"`);
+    console.log(`Creamos la base de datos "${nombre}"`);
   }
 }
 
@@ -92,11 +92,11 @@ async function main() {
   await asegurarBaseDeDatos();
   const db = await pool.connect();
   try {
-    console.log('🧱 Creando esquema...');
+    console.log('Creando esquema...');
     await db.query(fs.readFileSync(path.join(SERVER_DIR, 'schema.sql'), 'utf8'));
 
     // ===== Módulo: Usuarios =====
-    console.log('👤 Usuarios...');
+    console.log('Usuarios...');
     const { rows: [admin] } = await db.query(
       `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol, creado_en)
        VALUES ($1,$2,$3,$4,$5,'administrador',$6) RETURNING id`,
@@ -118,7 +118,7 @@ async function main() {
     const principal = donantes[0];
 
     // ===== Módulo: Puntos de recolección =====
-    console.log('📍 Puntos de recolección (centros universitarios UdeG)...');
+    console.log('Puntos de recolección (centros universitarios UdeG)...');
     const puntos = [
       ['CUCEI', 'Olímpica', 'Guadalajara', 'Blvd. Marcelino García Barragán 1421', '33 1378 5900', 'Lun a Vie · 9:00 a 18:00'],
       ['CUCEA', 'Los Belenes', 'Zapopan', 'Periférico Norte 799, Núcleo Universitario Los Belenes', '33 3770 3300', 'Lun a Vie · 9:00 a 17:00'],
@@ -139,7 +139,7 @@ async function main() {
     const [P_CUCEI, P_CUCEA, P_CUCS, P_CUCSH, P_CUAAD] = puntoIds;
 
     // ===== Módulo: Eventos =====
-    console.log('📅 Eventos...');
+    console.log('Eventos...');
     const desc = (lugar) =>
       `Únete a nuestra campaña de donación de cabello en ${lugar}. Tu aporte puede convertirse en una peluca y devolverle la esperanza a niñas y niños que enfrentan el cáncer.`;
 
@@ -205,7 +205,7 @@ async function main() {
       return rows[0].id;
     };
 
-    console.log('🗓️  Citas y donaciones de los eventos pasados...');
+    console.log('Citas y donaciones de los eventos pasados...');
     for (const [idx, ev] of pasados.entries()) {
       const diaEvento = fecha(ev.fecha, '08:00');
       const horarios = generarHorarios(ev.hi, ev.hf, ev.d);
@@ -232,7 +232,7 @@ async function main() {
       }
     }
 
-    console.log('🙋 Citas para los eventos próximos...');
+    console.log('Citas para los eventos próximos...');
     for (const ev of proximos) {
       const horarios = generarHorarios(ev.hi, ev.hf, ev.d);
       const inscritos = barajar(donantes.filter((d) => d !== principal)).slice(0, entre(8, 18));
@@ -248,7 +248,7 @@ async function main() {
     await insertarCita(principal.id, proximos[0].id, '10:00', 'activa', fecha('2026-09-30', '19:45'));
 
     // ===== Módulo: Notificaciones =====
-    console.log('🔔 Notificaciones...');
+    console.log('Notificaciones...');
     const notis = [
       ['cita', 'Nueva cita · Evento Comunitario For The Kids', fecha('2026-10-01', '09:12')],
       ['donante', 'Nuevo donante registrado', fecha('2026-09-28', '18:40')],
@@ -264,7 +264,7 @@ async function main() {
              (SELECT COUNT(*) FROM eventos) AS eventos,
              (SELECT COUNT(*) FROM citas) AS citas,
              (SELECT COUNT(*) FROM donaciones) AS donaciones`);
-    console.log(`\n✅ Listo: ${t.donantes} donantes, ${t.eventos} eventos, ${t.citas} citas, ${t.donaciones} donaciones.`);
+    console.log(`\nListo: ${t.donantes} donantes, ${t.eventos} eventos, ${t.citas} citas, ${t.donaciones} donaciones.`);
     console.log(`   Admin -> ${ADMIN.correo}`);
     console.log('   Las cuentas de los donantes están al inicio de server/seed.js');
   } finally {
@@ -275,7 +275,7 @@ async function main() {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
-    console.error('❌ Error inicializando la BD:', err);
+    console.error('Error inicializando la BD:', err);
     process.exit(1);
   });
 }

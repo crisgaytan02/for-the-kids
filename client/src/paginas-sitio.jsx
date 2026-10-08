@@ -1318,16 +1318,14 @@ export function MisDonaciones() {
             icon={HandHeart}
             label="Donaciones realizadas"
             value={r.donaciones}
-            delta={r.donaciones_anio ? `+${r.donaciones_anio} este año` : null}
           />
           <Metric
             icon={Ruler}
             label="Cabello donado"
             value={`${numero(r.cabello_cm)} cm`}
-            delta={r.ultimo_cabello_cm ? `+${numero(r.ultimo_cabello_cm)} cm` : null}
           />
           <Metric icon={Sparkles} label="Campañas apoyadas" value={r.campanas} />
-          <Metric icon={Heart} label="Familias alcanzadas" value={r.familias} delta={r.familias ? 'Gracias' : null} />
+          <Metric icon={Heart} label="Familias alcanzadas" value={r.familias} />
         </div>
       )}
 

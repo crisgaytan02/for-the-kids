@@ -181,9 +181,11 @@ test('RF-08 agendar, reprogramar y cancelar dejan registro de correo', async () 
   assert.equal(rep.status, 200);
   const can = await api('PATCH', `/citas/${cita.data.id}/cancelar`, { token: tokenNuevo });
   assert.equal(can.status, 200);
-  await new Promise((r) => setTimeout(r, 500));
+  // Los correos se mandan en segundo plano: esperamos hasta 5 s a que queden los 3 registros
+  const contar = async () => (await query('SELECT COUNT(*) AS n FROM log_correos')).rows[0].n - antes;
+  for (let i = 0; i < 50 && (await contar()) < 3; i++) await new Promise((r) => setTimeout(r, 100));
   const { rows } = await query('SELECT tipo FROM log_correos ORDER BY id DESC LIMIT 3');
-  assert.equal((await query('SELECT COUNT(*) AS n FROM log_correos')).rows[0].n - antes, 3);
+  assert.equal(await contar(), 3);
   assert.deepEqual(rows.map((r) => r.tipo).sort(), ['cancelacion', 'confirmacion', 'reprogramacion']);
 });
 

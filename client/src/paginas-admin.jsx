@@ -190,25 +190,16 @@ export function Dashboard() {
         </div>
       ) : (
         <div className="metrics">
-          <Metric icon={Heart} label="Personas beneficiadas" value={numero(m.beneficiadas.valor)} delta={m.beneficiadas.variacion} />
-          <Metric icon={CalendarCheck} label="Citas agendadas" value={numero(m.citas.valor)} delta={m.citas.variacion} />
-          <Metric icon={HandHeart} label="Donaciones realizadas" value={numero(m.donaciones.valor)} delta={m.donaciones.variacion} />
+          <Metric icon={Heart} label="Personas beneficiadas" value={numero(m.beneficiadas.valor)} />
+          <Metric icon={CalendarCheck} label="Citas agendadas" value={numero(m.citas.valor)} />
+          <Metric icon={HandHeart} label="Donaciones realizadas" value={numero(m.donaciones.valor)} />
           <Metric
             icon={CalendarDays}
             label="Eventos activos"
             value={m.eventos.valor}
-            delta={m.eventos.nuevos ? `+${m.eventos.nuevos} nuevos` : null}
           />
         </div>
       )}
-      <p
-        className="tiny"
-        style={{
-          marginTop: -10,
-        }}
-      >
-        Los porcentajes comparan los últimos 30 días contra los 30 anteriores.
-      </p>
 
       <div className="dash-grid">
         <section className="card">
@@ -395,7 +386,6 @@ export function EventosAdmin() {
             icon={CalendarDays}
             label="Eventos activos"
             value={s.activos}
-            delta={s.activos_nuevos_mes ? `+${s.activos_nuevos_mes}` : null}
           />
           <Metric icon={CalendarPlus} label="Próximos" value={s.proximos} deltaLabel="Activos, programados y borradores" />
           <Metric icon={Users} label="Inscripciones" value={s.inscripciones} deltaLabel="Citas activas y atendidas" />
@@ -1212,15 +1202,14 @@ export function Donaciones() {
 
       {r ? (
         <div className="metrics">
-          <Metric icon={HandHeart} label="Donaciones totales" value={numero(r.total)} delta={dash?.metricas.donaciones.variacion} />
-          <Metric icon={TrendingUp} label="Últimos 30 días" value={numero(r.este_mes)} delta={r.variacion_mes} />
+          <Metric icon={HandHeart} label="Donaciones totales" value={numero(r.total)} />
+          <Metric icon={TrendingUp} label="Últimos 30 días" value={numero(r.este_mes)} />
           <Metric
             icon={Ruler}
             label="Cabello recolectado"
             value={`${numero(r.cabello_cm)} cm`}
-            delta={r.cabello_mes_cm ? `+${numero(r.cabello_mes_cm)} cm` : null}
           />
-          <Metric icon={CheckCircle2} label="Pendientes" value={r.pendientes} delta={r.pendientes ? 'Revisar' : null} />
+          <Metric icon={CheckCircle2} label="Pendientes" value={r.pendientes} />
         </div>
       ) : (
         <div className="metrics">

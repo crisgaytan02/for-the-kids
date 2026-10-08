@@ -44,7 +44,7 @@ async function montarFrontend(desarrollo) {
   }
   const dist = path.join(clientDir, 'dist');
   if (!fs.existsSync(dist)) {
-    console.warn('⚠️  No existe client/dist. Corre "npm run build" o usa "npm run dev".');
+    console.warn('No existe client/dist. Corre "npm run build" o usa "npm run dev".');
     return;
   }
   app.use(express.static(dist));
@@ -53,14 +53,14 @@ async function montarFrontend(desarrollo) {
 
 export async function iniciarServidor({ desarrollo = false } = {}) {
   if (!process.env.JWT_SECRET) {
-    console.error('⚠️  Falta JWT_SECRET en el .env. Copia .env.example como .env y llénalo.');
+    console.error('Falta JWT_SECRET en el .env. Copia .env.example como .env y llénalo.');
     process.exit(1);
   }
   await montarFrontend(desarrollo);
   app.use(manejarErrores);
   const puerto = Number(process.env.PORT || 4000);
   app.listen(puerto, () => {
-    console.log(`💛 For The Kids en http://localhost:${puerto}${desarrollo ? ' (modo desarrollo)' : ''}`);
+    console.log(`For The Kids en http://localhost:${puerto}${desarrollo ? ' (modo desarrollo)' : ''}`);
     verificarCorreo();
     iniciarRecordatorios();
   });

@@ -152,7 +152,7 @@ export function PublicLayout() {
       <header className="topnav">
         <div className="container topnav__inner">
           <Link to="/" aria-label="For The Kids, inicio">
-            <Logo height={46} />
+            <Logo height={54} />
           </Link>
           <nav className="topnav__links" aria-label="Principal">
             {LINKS_PUBLICOS.map((l) => (
@@ -189,7 +189,7 @@ export function PublicLayout() {
 
       <footer className="footer">
         <div className="container row between">
-          <Logo />
+          <Logo height={48} />
           <span>Proyecto académico · Equipo Tlaxcala · CUCEI {new Date().getFullYear()}</span>
         </div>
       </footer>
@@ -303,7 +303,7 @@ export function AdminLayout() {
     <div className="admin">
       <aside className="sidebar">
         <Link to="/admin">
-          <Logo dark />
+          <Logo dark height={62} />
         </Link>
         <nav aria-label="Panel">
           {NAV_ADMIN.map(({ to, label, icon: Icon, end, badge }) => (
@@ -365,7 +365,7 @@ export function AdminLayout() {
         </header>
 
         <header className="admin-mtop">
-          <Logo dark />
+          <Logo dark height={46} />
           <div
             className="row"
             style={{
