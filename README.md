@@ -1,6 +1,4 @@
-# For The Kids 💛
-
-Sistema de gestión para la campaña de donación de cabello **For The Kids**. Lo hicimos para la materia de **Calidad de Software** (CUCEI, ciclo 2026B) con la profesora Zoila Liliana Herrera Luján.
+# For The Kids
 
 La idea es simple: que la gente encuentre un evento, agende su cita sin pelearse por el lugar y reciba sus correos de confirmación y recordatorio. Del otro lado, el equipo organizador tiene todo (citas, donaciones de cabello, reportes) en un solo panel, en vez de hojas de cálculo y mensajes de WhatsApp.
 
@@ -205,17 +203,4 @@ Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador
 ## Pendientes para la V2
 
 - Recuperar contraseña por correo.
-- Recordatorios por WhatsApp.
 
----
-
-## Despliegue
-
-En producción Express sirve la página compilada (`client/dist`), así que todo se sube junto:
-
-- **Build:** `npm install && npm run build`
-- **Start:** `npm start` (archivo de entrada: `server/index.js`)
-- **Variables:** `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL` (la URL pública), `APP_TZ=America/Mexico_City` y las `SMTP_*` para los correos.
-- Después del primer despliegue se corre una vez `npm run db:init` (borra y vuelve a crear las tablas).
-
-Sirve igual en Render + Neon o en Hostinger (plan Business/Cloud con Node.js) + Neon. Las imágenes que sube el admin se guardan en `server/uploads`; en hostings con disco temporal se pierden al redeplegar.
