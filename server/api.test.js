@@ -2,7 +2,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from './index.js';
-import { pool, query } from './core.js';
+import { generarFolio, hashToken, nuevoToken, pool, procesarColaCorreos, query } from './core.js';
 import { ADMIN, DONANTES } from './seed.js';
 
 const [, , CORREO_DONANTE, PASS_DONANTE] = DONANTES[0];
@@ -37,6 +37,8 @@ before(async () => {
 });
 
 after(async () => {
+  await query('DELETE FROM log_accesos WHERE correo LIKE $1', ['qa.%']);
+  await query('DELETE FROM cola_correos WHERE para LIKE $1', ['qa.%']);
   await query('DELETE FROM usuarios WHERE correo LIKE $1', ['qa.%']);
   await query(`DELETE FROM eventos WHERE nombre LIKE 'QA %'`);
   await query(`DELETE FROM notificaciones WHERE mensaje LIKE '%QA%'`);
@@ -155,10 +157,31 @@ test('RF-13 el reporte rechaza rangos de más de 90 días', async () => {
   assert.equal(ok.status, 200);
 });
 
+const citaDeEventoPasado = async () => {
+  const {
+    rows: [ev],
+  } = await query(`SELECT id, to_char(hora_inicio, 'HH24:MI') AS hora FROM eventos WHERE fecha < CURRENT_DATE ORDER BY fecha DESC LIMIT 1`);
+  const {
+    rows: [u],
+  } = await query(`SELECT id FROM usuarios WHERE correo = $1`, [correoNuevo]);
+  await query(`DELETE FROM citas WHERE usuario_id = $1 AND evento_id = $2`, [u.id, ev.id]);
+  const {
+    rows: [cita],
+  } = await query(`INSERT INTO citas (folio, usuario_id, evento_id, hora) VALUES ($1,$2,$3,$4) RETURNING id, folio`, [generarFolio(), u.id, ev.id, ev.hora]);
+  return cita;
+};
+
+test('RF-10 la asistencia no se puede marcar antes del día del evento', async () => {
+  const { data: activas } = await api('GET', '/citas/admin?estado=activa&proximas=1', { token: tokenAdmin });
+  const futura = activas.find((c) => c.fecha > new Date().toISOString().slice(0, 10));
+  const r = await api('PATCH', `/citas/${futura.id}/estado`, { token: tokenAdmin, body: { estado: 'atendida' } });
+  assert.equal(r.status, 409);
+});
+
 test('RF-10 solo acepta cabello de 20 a 35 cm y la donación queda ligada a la cita atendida', async () => {
-  const { data: activas } = await api('GET', '/citas/admin?estado=activa', { token: tokenAdmin });
-  const cita = activas[activas.length - 1];
-  await api('PATCH', `/citas/${cita.id}/estado`, { token: tokenAdmin, body: { estado: 'atendida' } });
+  const cita = await citaDeEventoPasado();
+  const marcada = await api('PATCH', `/citas/${cita.id}/estado`, { token: tokenAdmin, body: { estado: 'atendida' } });
+  assert.equal(marcada.status, 200);
   const corto = await api('POST', '/donaciones', { token: tokenAdmin, body: { cita_id: cita.id, largo_cm: 15 } });
   assert.equal(corto.status, 400);
   const largo = await api('POST', '/donaciones', { token: tokenAdmin, body: { cita_id: cita.id, largo_cm: 40 } });
@@ -199,4 +222,183 @@ test('RF-13 el reporte se exporta en PDF y solo lo baja el admin', async () => {
 
   const donante = await fetch(`${base}${ruta}`, { headers: { Authorization: `Bearer ${tokenMaria}` } });
   assert.equal(donante.status, 403);
+});
+
+const registrarQa = async (prefijo, password = 'Prueba123') => {
+  const correo = `qa.${prefijo}.${Date.now()}@correo.com`;
+  const r = await api('POST', '/auth/registro', {
+    body: { nombre: 'QA', apellido: prefijo, correo, telefono: '3312345678', password, consentimientoDatos: true },
+  });
+  assert.equal(r.status, 201);
+  return { correo, password, token: r.data.token, id: r.data.usuario.id };
+};
+
+test('Seguridad: el registro guarda la fecha del consentimiento', async () => {
+  const qa = await registrarQa('consentimiento');
+  const {
+    rows: [u],
+  } = await query('SELECT consentimiento_en FROM usuarios WHERE id = $1', [qa.id]);
+  assert.ok(u.consentimiento_en);
+});
+
+test('Seguridad: los inicios de sesión fallidos quedan en la bitácora con IP', async () => {
+  const qa = await registrarQa('bitacora');
+  const r = await api('POST', '/auth/login', { body: { correo: qa.correo, password: 'incorrecta1' } });
+  assert.equal(r.status, 401);
+  const {
+    rows: [a],
+  } = await query('SELECT exito, motivo, ip FROM log_accesos WHERE correo = $1 ORDER BY id DESC LIMIT 1', [qa.correo]);
+  assert.equal(a.exito, false);
+  assert.equal(a.motivo, 'password_incorrecta');
+  assert.ok(a.ip);
+  const accesos = await api('GET', '/admin/accesos', { token: tokenAdmin });
+  assert.equal(accesos.status, 200);
+  assert.ok(accesos.data.accesos.some((x) => x.correo === qa.correo));
+  assert.equal((await api('GET', '/admin/accesos', { token: tokenMaria })).status, 403);
+});
+
+test('Recuperación: responde igual exista o no el correo y solo crea enlace para cuentas reales', async () => {
+  const qa = await registrarQa('recupera');
+  const existe = await api('POST', '/auth/recuperar', { body: { correo: qa.correo } });
+  const noExiste = await api('POST', '/auth/recuperar', { body: { correo: `qa.nadie.${Date.now()}@correo.com` } });
+  assert.equal(existe.status, 200);
+  assert.equal(noExiste.status, 200);
+  assert.equal(existe.data.mensaje, noExiste.data.mensaje);
+  const {
+    rows: [t],
+  } = await query(`SELECT tipo, expira_en FROM tokens_recuperacion WHERE usuario_id = $1 AND usado_en IS NULL`, [qa.id]);
+  assert.equal(t.tipo, 'recuperacion');
+  assert.ok(new Date(t.expira_en) > new Date());
+});
+
+test('Recuperación: el enlace cambia la contraseña, cierra sesiones abiertas y solo sirve una vez', async () => {
+  const qa = await registrarQa('restablece');
+  const token = nuevoToken();
+  await query(`INSERT INTO tokens_recuperacion (usuario_id, token_hash, expira_en) VALUES ($1,$2, NOW() + interval '1 hour')`, [qa.id, hashToken(token)]);
+
+  const valido = await api('POST', '/auth/restablecer/validar', { body: { token } });
+  assert.equal(valido.status, 200);
+  assert.equal(valido.data.tipo, 'recuperacion');
+
+  const debil = await api('POST', '/auth/restablecer', { body: { token, password: 'corta' } });
+  assert.equal(debil.status, 400);
+
+  const ok = await api('POST', '/auth/restablecer', { body: { token, password: 'NuevaClave2026' } });
+  assert.equal(ok.status, 200);
+
+  assert.equal((await api('GET', '/auth/yo', { token: qa.token })).status, 401);
+  assert.equal((await api('POST', '/auth/login', { body: { correo: qa.correo, password: qa.password } })).status, 401);
+  assert.equal((await api('POST', '/auth/login', { body: { correo: qa.correo, password: 'NuevaClave2026' } })).status, 200);
+
+  const otraVez = await api('POST', '/auth/restablecer', { body: { token, password: 'OtraClave2026' } });
+  assert.equal(otraVez.status, 400);
+});
+
+test('Recuperación: un enlace vencido no sirve', async () => {
+  const qa = await registrarQa('vencido');
+  const token = nuevoToken();
+  await query(`INSERT INTO tokens_recuperacion (usuario_id, token_hash, expira_en) VALUES ($1,$2, NOW() - interval '1 minute')`, [qa.id, hashToken(token)]);
+  assert.equal((await api('POST', '/auth/restablecer/validar', { body: { token } })).status, 400);
+  assert.equal((await api('POST', '/auth/restablecer', { body: { token, password: 'NuevaClave2026' } })).status, 400);
+});
+
+test('Perfil: cambiar la contraseña pide la actual y entrega una sesión nueva', async () => {
+  const qa = await registrarQa('cambio');
+  const mala = await api('PATCH', '/auth/password', { token: qa.token, body: { actual: 'Equivocada1', nueva: 'Distinta2026' } });
+  assert.equal(mala.status, 400);
+  const ok = await api('PATCH', '/auth/password', { token: qa.token, body: { actual: qa.password, nueva: 'Distinta2026' } });
+  assert.equal(ok.status, 200);
+  assert.equal((await api('GET', '/auth/yo', { token: qa.token })).status, 401);
+  assert.equal((await api('GET', '/auth/yo', { token: ok.data.token })).status, 200);
+});
+
+test('Administradores: solo un admin puede dar acceso y el cambio de rol se aplica al instante', async () => {
+  const qa = await registrarQa('promovido');
+  const datos = { nombre: 'QA', apellido: 'Admin', correo: qa.correo, telefono: '3312345678' };
+  assert.equal((await api('POST', '/admin/administradores', { token: tokenMaria, body: datos })).status, 403);
+
+  const promovido = await api('POST', '/admin/administradores', { token: tokenAdmin, body: datos });
+  assert.equal(promovido.status, 201);
+  assert.equal(promovido.data.accion, 'promovido');
+  assert.equal((await api('GET', '/reportes/dashboard', { token: qa.token })).status, 401);
+
+  const login = await api('POST', '/auth/login', { body: { correo: qa.correo, password: qa.password } });
+  assert.equal(login.data.usuario.rol, 'administrador');
+  assert.equal((await api('GET', '/reportes/dashboard', { token: login.data.token })).status, 200);
+
+  const lista = await api('GET', '/admin/administradores', { token: tokenAdmin });
+  assert.ok(lista.data.some((a) => a.correo === qa.correo));
+
+  assert.equal((await api('PATCH', `/admin/administradores/${qa.id}/quitar`, { token: login.data.token })).status, 409);
+  assert.equal((await api('PATCH', `/admin/administradores/${qa.id}/quitar`, { token: tokenAdmin })).status, 200);
+  assert.equal((await api('GET', '/reportes/dashboard', { token: login.data.token })).status, 401);
+});
+
+test('Administradores: invitar un correo nuevo crea la cuenta con enlace de activación', async () => {
+  const correo = `qa.invitado.${Date.now()}@correo.com`;
+  const r = await api('POST', '/admin/administradores', {
+    token: tokenAdmin,
+    body: { nombre: 'QA', apellido: 'Invitado', correo, telefono: '3312345678' },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.data.accion, 'invitado');
+  const {
+    rows: [t],
+  } = await query(
+    `SELECT t.tipo FROM tokens_recuperacion t JOIN usuarios u ON u.id = t.usuario_id WHERE u.correo = $1 AND t.usado_en IS NULL`,
+    [correo]
+  );
+  assert.equal(t.tipo, 'activacion');
+  const repetido = await api('POST', '/admin/administradores', { token: tokenAdmin, body: { nombre: 'QA', correo, telefono: '3312345678' } });
+  assert.equal(repetido.status, 409);
+});
+
+test('RF-07 cancelar dos veces la misma cita responde 409', async () => {
+  const qa = await registrarQa('doblecancel');
+  const { data: ev } = await api('POST', '/eventos', {
+    token: tokenAdmin,
+    body: {
+      nombre: 'QA doble cancelación', fecha: '2030-02-10', hora_inicio: '08:00', hora_fin: '09:00', cupo_total: 5,
+      capacidad_por_horario: 5, centro: 'QA', direccion: 'QA', ciudad: 'QA', estado: 'activo',
+    },
+  });
+  const cita = await api('POST', '/citas', { token: qa.token, body: { evento_id: ev.id, hora: '08:00' } });
+  assert.equal(cita.status, 201);
+  const [a, b] = await Promise.all([
+    api('PATCH', `/citas/${cita.data.id}/cancelar`, { token: qa.token }),
+    api('PATCH', `/citas/${cita.data.id}/cancelar`, { token: qa.token }),
+  ]);
+  assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+});
+
+test('Evento: la lista de asistentes se descarga en PDF y solo la baja el admin', async () => {
+  const { data: eventos } = await api('GET', '/eventos');
+  const ruta = `${base}/eventos/${eventos[0].id}/asistentes/pdf`;
+  const ok = await fetch(ruta, { headers: { Authorization: `Bearer ${tokenAdmin}` } });
+  assert.equal(ok.status, 200);
+  assert.match(ok.headers.get('content-type'), /application\/pdf/);
+  assert.equal(Buffer.from(await ok.arrayBuffer()).subarray(0, 4).toString(), '%PDF');
+  const donante = await fetch(ruta, { headers: { Authorization: `Bearer ${tokenMaria}` } });
+  assert.equal(donante.status, 403);
+});
+
+test('RF-08 un correo que falló se reintenta desde la cola', async () => {
+  const para = `qa.cola.${Date.now()}@correo.com`;
+  await query(
+    `INSERT INTO cola_correos (para, tipo, asunto, contenido, proximo_intento) VALUES ($1,'prueba','QA cola',$2, NOW() - interval '1 minute')`,
+    [para, JSON.stringify({ titulo: 'QA', intro: 'Reintento' })]
+  );
+  const r = await procesarColaCorreos();
+  assert.ok(r.enviados >= 1);
+  assert.equal((await query('SELECT 1 FROM cola_correos WHERE para = $1', [para])).rowCount, 0);
+  assert.equal((await query('SELECT 1 FROM log_correos WHERE destinatario = $1 AND exito', [para])).rowCount, 1);
+  await query('DELETE FROM log_correos WHERE destinatario = $1', [para]);
+});
+
+test('Seguridad: pedir muchos enlaces de recuperación desde la misma IP se limita', async () => {
+  const estados = [];
+  for (let i = 0; i < 8; i++) {
+    estados.push((await api('POST', '/auth/recuperar', { body: { correo: `qa.limite.${i}@correo.com` } })).status);
+  }
+  assert.ok(estados.includes(429));
 });

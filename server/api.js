@@ -10,20 +10,32 @@ import {
   HttpError,
   LARGO_MAX,
   LARGO_MIN,
+  REGLA_PASSWORD,
   SQL_CITA,
   SQL_EVENTO,
   TIME_RE,
   UPLOADS_DIR,
+  APP_URL,
+  VIGENCIA_ACTIVACION_HORAS,
+  VIGENCIA_RECUPERACION_MIN,
   asyncHandler,
+  correoActivacion,
   correoCancelacion,
   correoConfigurado,
   correoConfirmacion,
+  correoPasswordCambiada,
   correoPrueba,
+  correoRecuperacion,
   correoReprogramacion,
   generarFolio,
   generarHorarios,
+  generarListaAsistentesPdf,
   generarReportePdf,
+  hashToken,
+  limitarPorIp,
   notificar,
+  nuevoToken,
+  passwordValida,
   query,
   requireAdmin,
   requireAuth,
@@ -39,21 +51,44 @@ const api = Router();
 const publico = (u) => ({ id: u.id, nombre: u.nombre, apellido: u.apellido, correo: u.correo, telefono: u.telefono, rol: u.rol });
 
 const firmarToken = (u) =>
-  jwt.sign({ sub: u.id, rol: u.rol, nombre: u.nombre }, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '24h' });
+  jwt.sign({ sub: u.id, rol: u.rol, nombre: u.nombre, ver: u.sesion_version ?? 0 }, process.env.JWT_SECRET, {
+    expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+  });
 
 const filtrar = (body, campos) => Object.fromEntries(campos.filter((c) => body[c] !== undefined).map((c) => [c, body[c]]));
+
+const texto = (valor) => (typeof valor === 'string' ? valor.trim() : '');
+
+function validarDatosPersona({ nombre, correo, telefono }) {
+  if (!texto(nombre)) throw new HttpError(400, 'Escribe el nombre.');
+  if (texto(nombre).length > 80) throw new HttpError(400, 'El nombre es demasiado largo.');
+  if (!EMAIL_RE.test(texto(correo)) || texto(correo).length > 160) throw new HttpError(400, 'El correo no tiene un formato válido.');
+  if (String(telefono ?? '').replace(/\D/g, '').length !== 10) throw new HttpError(400, 'El teléfono debe tener 10 dígitos, sin lada.');
+}
+
+const limiteLogin = limitarPorIp({ max: 20, ventanaMin: 15, soloFallidos: true });
+const limiteRegistro = limitarPorIp({ max: 30, ventanaMin: 15 });
+const limiteRecuperar = limitarPorIp({ max: 5, ventanaMin: 15, mensaje: 'Ya pediste varios enlaces. Revisa tu correo (también en spam) o intenta en 15 minutos.' });
+const limiteRestablecer = limitarPorIp({ max: 10, ventanaMin: 15, soloFallidos: true });
+
+const registrarAcceso = (correo, usuarioId, ip, exito, motivo) =>
+  query('INSERT INTO log_accesos (correo, usuario_id, ip, exito, motivo) VALUES ($1,$2,$3,$4,$5)', [
+    String(correo).slice(0, 160),
+    usuarioId,
+    ip ? String(ip).replace(/^::ffff:/, '').slice(0, 64) : null,
+    exito,
+    motivo,
+  ]).catch((err) => console.error(`No se pudo registrar el acceso: ${err.message}`));
 
 // ===== Módulo: Registro =====
 api.post(
   '/auth/registro',
+  limiteRegistro,
   asyncHandler(async (req, res) => {
     const { nombre, apellido = '', correo, telefono, password, consentimientoDatos } = req.body;
     requireFields(req.body, ['nombre', 'correo', 'telefono', 'password']);
-    if (!EMAIL_RE.test(correo)) throw new HttpError(400, 'El correo no tiene un formato válido.');
-    if (String(password).length < 8 || !/\d/.test(password)) {
-      throw new HttpError(400, 'La contraseña debe tener mínimo 8 caracteres y al menos un número.');
-    }
-    if (String(telefono).replace(/\D/g, '').length !== 10) throw new HttpError(400, 'El teléfono debe tener 10 dígitos, sin lada.');
+    validarDatosPersona({ nombre, correo, telefono });
+    if (!passwordValida(password)) throw new HttpError(400, REGLA_PASSWORD);
     if (consentimientoDatos !== true) {
       throw new HttpError(400, 'Necesitamos tu consentimiento para el tratamiento de tus datos personales.');
     }
@@ -62,10 +97,17 @@ api.post(
     const existe = await query('SELECT 1 FROM usuarios WHERE correo = $1', [correoNorm]);
     if (existe.rowCount) throw new HttpError(409, 'Ese correo ya está registrado. ¿Quieres iniciar sesión?');
 
-    const { rows } = await query(
-      'INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-      [nombre.trim(), apellido.trim(), correoNorm, telefono.trim(), await bcrypt.hash(password, 10)]
-    );
+    let rows;
+    try {
+      ({ rows } = await query(
+        `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, consentimiento_en)
+         VALUES ($1,$2,$3,$4,$5,NOW()) RETURNING *`,
+        [texto(nombre), texto(apellido).slice(0, 80), correoNorm, String(telefono).trim(), await bcrypt.hash(password, 10)]
+      ));
+    } catch (err) {
+      if (err.code === '23505') throw new HttpError(409, 'Ese correo ya está registrado. ¿Quieres iniciar sesión?');
+      throw err;
+    }
     await notificar('donante', `Nuevo donante: ${rows[0].nombre} ${rows[0].apellido}`.trim());
     res.status(201).json({ token: firmarToken(rows[0]), usuario: publico(rows[0]) });
   })
@@ -76,21 +118,31 @@ const MAX_INTENTOS = 5;
 const VENTANA_MIN = 10;
 const BLOQUEO_MIN = 15;
 
+const HASH_FALSO = bcrypt.hashSync('usuario-inexistente-ftk', 10);
+
 api.post(
   '/auth/login',
+  limiteLogin,
   asyncHandler(async (req, res) => {
     requireFields(req.body, ['correo', 'password']);
-    const { rows } = await query('SELECT * FROM usuarios WHERE correo = $1', [req.body.correo.trim().toLowerCase()]);
+    const correo = String(req.body.correo).trim().toLowerCase();
+    const password = String(req.body.password);
+    const { rows } = await query('SELECT * FROM usuarios WHERE correo = $1', [correo]);
     const u = rows[0];
     const credencialesMal = new HttpError(401, 'Correo o contraseña incorrectos.');
-    if (!u) throw credencialesMal;
+    if (!u) {
+      await bcrypt.compare(password, HASH_FALSO);
+      await registrarAcceso(correo, null, req.ip, false, 'correo_no_registrado');
+      throw credencialesMal;
+    }
 
     if (u.bloqueado_hasta && new Date(u.bloqueado_hasta) > new Date()) {
       const min = Math.ceil((new Date(u.bloqueado_hasta) - new Date()) / 60000);
+      await registrarAcceso(correo, u.id, req.ip, false, 'cuenta_bloqueada');
       throw new HttpError(423, `Demasiados intentos. Intenta de nuevo en ${min} min.`);
     }
 
-    if (!(await bcrypt.compare(req.body.password, u.password_hash))) {
+    if (!(await bcrypt.compare(password, u.password_hash))) {
       const ventanaVencida = !u.primer_intento_en || Date.now() - new Date(u.primer_intento_en).getTime() > VENTANA_MIN * 60000;
       const intentos = ventanaVencida ? 1 : u.intentos_fallidos + 1;
       if (intentos >= MAX_INTENTOS) {
@@ -99,6 +151,7 @@ api.post(
              bloqueado_hasta = NOW() + ($2 || ' minutes')::interval WHERE id = $1`,
           [u.id, BLOQUEO_MIN]
         );
+        await registrarAcceso(correo, u.id, req.ip, false, 'bloqueo_aplicado');
         throw new HttpError(423, `Bloqueamos tu acceso ${BLOQUEO_MIN} minutos por seguridad.`);
       }
       await query(
@@ -106,11 +159,127 @@ api.post(
            primer_intento_en = CASE WHEN $3 THEN NOW() ELSE primer_intento_en END WHERE id = $1`,
         [u.id, intentos, ventanaVencida]
       );
+      await registrarAcceso(correo, u.id, req.ip, false, 'password_incorrecta');
       throw credencialesMal;
     }
 
     await query('UPDATE usuarios SET intentos_fallidos = 0, primer_intento_en = NULL, bloqueado_hasta = NULL WHERE id = $1', [u.id]);
+    await registrarAcceso(correo, u.id, req.ip, true, 'ok');
     res.json({ token: firmarToken(u), usuario: publico(u) });
+  })
+);
+
+// ===== Módulo: Recuperación de contraseña =====
+async function crearEnlace(client, usuarioId, tipo) {
+  const token = nuevoToken();
+  const vigencia = tipo === 'activacion' ? `${VIGENCIA_ACTIVACION_HORAS} hours` : `${VIGENCIA_RECUPERACION_MIN} minutes`;
+  await client.query(`UPDATE tokens_recuperacion SET usado_en = NOW() WHERE usuario_id = $1 AND usado_en IS NULL`, [usuarioId]);
+  await client.query(
+    `INSERT INTO tokens_recuperacion (usuario_id, token_hash, tipo, expira_en) VALUES ($1,$2,$3, NOW() + $4::interval)`,
+    [usuarioId, hashToken(token), tipo, vigencia]
+  );
+  return `${APP_URL}/restablecer?token=${token}`;
+}
+
+async function buscarEnlace(db, token, bloquear = false) {
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const { rows } = await db.query(
+    `SELECT t.id, t.tipo, t.usuario_id, u.correo, u.nombre
+     FROM tokens_recuperacion t JOIN usuarios u ON u.id = t.usuario_id
+     WHERE t.token_hash = $1 AND t.usado_en IS NULL AND t.expira_en > NOW()
+     ${bloquear ? 'FOR UPDATE OF t' : ''}`,
+    [hashToken(token)]
+  );
+  return rows[0] || null;
+}
+
+const enlaceInvalido = () => new HttpError(400, 'El enlace no es válido o ya venció. Pide uno nuevo desde "¿Olvidaste tu contraseña?".');
+
+const ocultarCorreo = (correo) => {
+  const [usuario, dominio] = correo.split('@');
+  return `${usuario.slice(0, 2)}${'•'.repeat(Math.max(usuario.length - 2, 1))}@${dominio}`;
+};
+
+api.post(
+  '/auth/recuperar',
+  limiteRecuperar,
+  asyncHandler(async (req, res) => {
+    const correo = texto(req.body?.correo).toLowerCase();
+    if (!EMAIL_RE.test(correo)) throw new HttpError(400, 'Escribe un correo válido.');
+    const {
+      rows: [u],
+    } = await query('SELECT id, nombre, correo FROM usuarios WHERE correo = $1', [correo]);
+    if (u) {
+      const url = await withTransaction((client) => crearEnlace(client, u.id, 'recuperacion'));
+      correoRecuperacion(u, url);
+      registrarAcceso(correo, u.id, req.ip, true, 'recuperacion_solicitada');
+    } else {
+      registrarAcceso(correo, null, req.ip, false, 'recuperacion_sin_cuenta');
+    }
+    res.json({
+      ok: true,
+      mensaje: `Si ese correo está registrado, te enviamos un enlace para crear una nueva contraseña. Vence en ${VIGENCIA_RECUPERACION_MIN} minutos.`,
+    });
+  })
+);
+
+api.post(
+  '/auth/restablecer/validar',
+  limiteRestablecer,
+  asyncHandler(async (req, res) => {
+    const enlace = await buscarEnlace({ query }, req.body?.token);
+    if (!enlace) throw enlaceInvalido();
+    res.json({ ok: true, tipo: enlace.tipo, correo: ocultarCorreo(enlace.correo), nombre: enlace.nombre });
+  })
+);
+
+api.post(
+  '/auth/restablecer',
+  limiteRestablecer,
+  asyncHandler(async (req, res) => {
+    const { token, password } = req.body || {};
+    if (!passwordValida(password)) throw new HttpError(400, REGLA_PASSWORD);
+    const hash = await bcrypt.hash(password, 10);
+    const usuario = await withTransaction(async (client) => {
+      const enlace = await buscarEnlace(client, token, true);
+      if (!enlace) throw enlaceInvalido();
+      await client.query('UPDATE tokens_recuperacion SET usado_en = NOW() WHERE usuario_id = $1 AND usado_en IS NULL', [enlace.usuario_id]);
+      const { rows } = await client.query(
+        `UPDATE usuarios SET password_hash = $2, sesion_version = sesion_version + 1,
+           intentos_fallidos = 0, primer_intento_en = NULL, bloqueado_hasta = NULL
+         WHERE id = $1 RETURNING id, nombre, correo`,
+        [enlace.usuario_id, hash]
+      );
+      return { ...rows[0], tipo: enlace.tipo };
+    });
+    registrarAcceso(usuario.correo, usuario.id, req.ip, true, usuario.tipo === 'activacion' ? 'cuenta_activada' : 'password_restablecida');
+    if (usuario.tipo === 'recuperacion') correoPasswordCambiada(usuario);
+    res.json({ ok: true, mensaje: 'Listo, ya puedes iniciar sesión con tu nueva contraseña.' });
+  })
+);
+
+api.patch(
+  '/auth/password',
+  requireAuth,
+  limiteRestablecer,
+  asyncHandler(async (req, res) => {
+    const { actual, nueva } = req.body || {};
+    requireFields(req.body || {}, ['actual', 'nueva']);
+    if (!passwordValida(nueva)) throw new HttpError(400, REGLA_PASSWORD);
+    if (actual === nueva) throw new HttpError(400, 'La nueva contraseña debe ser distinta a la actual.');
+    const {
+      rows: [u],
+    } = await query('SELECT * FROM usuarios WHERE id = $1', [req.user.id]);
+    if (!(await bcrypt.compare(String(actual), u.password_hash))) throw new HttpError(400, 'Tu contraseña actual no es correcta.');
+    const {
+      rows: [actualizado],
+    } = await query('UPDATE usuarios SET password_hash = $2, sesion_version = sesion_version + 1 WHERE id = $1 RETURNING *', [
+      u.id,
+      await bcrypt.hash(nueva, 10),
+    ]);
+    registrarAcceso(u.correo, u.id, req.ip, true, 'password_cambiada');
+    correoPasswordCambiada(actualizado);
+    res.json({ token: firmarToken(actualizado), usuario: publico(actualizado) });
   })
 );
 
@@ -288,19 +457,49 @@ api.delete(
   requireAdmin,
   asyncHandler(async (req, res) => {
     const id = toInt(req.params.id, 'id');
+    const resultado = await withTransaction(async (client) => {
+      const ev = await client.query('SELECT id FROM eventos WHERE id = $1 FOR UPDATE', [id]);
+      if (!ev.rowCount) throw new HttpError(404, 'No encontramos ese evento.');
+      const {
+        rows: [c],
+      } = await client.query('SELECT COUNT(*) AS n FROM citas WHERE evento_id = $1', [id]);
+      if (c.n === 0) {
+        await client.query('DELETE FROM eventos WHERE id = $1', [id]);
+        return { accion: 'eliminado', afectadas: [] };
+      }
+      const { rows: afectadas } = await client.query(`${SQL_CITA} WHERE c.evento_id = $1 AND c.estado = 'activa'`, [id]);
+      await client.query(`UPDATE eventos SET estado = 'cancelado' WHERE id = $1`, [id]);
+      await client.query(`UPDATE citas SET estado = 'cancelada', cancelado_en = NOW() WHERE evento_id = $1 AND estado = 'activa'`, [id]);
+      return { accion: 'cancelado', afectadas };
+    });
+    resultado.afectadas.forEach((cita) => correoCancelacion({ ...cita, estado: 'cancelada' }, 'evento'));
+    if (resultado.accion === 'eliminado') return res.json({ ok: true, accion: 'eliminado' });
+    res.json({ ok: true, accion: 'cancelado', avisados: resultado.afectadas.length });
+  })
+);
+
+api.get(
+  '/eventos/:id/asistentes/pdf',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const id = toInt(req.params.id, 'id');
     const {
-      rows: [c],
-    } = await query('SELECT COUNT(*) AS n FROM citas WHERE evento_id = $1', [id]);
-    if (c.n > 0) {
-      const { rows: afectadas } = await query(`${SQL_CITA} WHERE c.evento_id = $1 AND c.estado = 'activa'`, [id]);
-      await query(`UPDATE eventos SET estado = 'cancelado' WHERE id = $1`, [id]);
-      await query(`UPDATE citas SET estado = 'cancelada', cancelado_en = NOW() WHERE evento_id = $1 AND estado = 'activa'`, [id]);
-      afectadas.forEach((cita) => correoCancelacion(cita, 'evento'));
-      return res.json({ ok: true, accion: 'cancelado', avisados: afectadas.length });
-    }
-    const r = await query('DELETE FROM eventos WHERE id = $1', [id]);
-    if (!r.rowCount) throw new HttpError(404, 'No encontramos ese evento.');
-    res.json({ ok: true, accion: 'eliminado' });
+      rows: [evento],
+    } = await query(`${SQL_EVENTO} WHERE e.id = $1`, [id]);
+    if (!evento) throw new HttpError(404, 'No encontramos ese evento.');
+    const { rows: asistentes } = await query(
+      `SELECT c.folio, c.estado, to_char(c.hora, 'HH24:MI') AS hora, u.nombre, u.apellido, u.telefono
+       FROM citas c JOIN usuarios u ON u.id = c.usuario_id
+       WHERE c.evento_id = $1 AND c.estado IN ('activa', 'atendida')
+       ORDER BY c.hora, u.apellido, u.nombre`,
+      [id]
+    );
+    const {
+      rows: [admin],
+    } = await query('SELECT nombre, apellido FROM usuarios WHERE id = $1', [req.user.id]);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="asistentes-evento-${id}-${evento.fecha}.pdf"`);
+    generarListaAsistentesPdf(evento, asistentes, `${admin.nombre} ${admin.apellido}`.trim(), res);
   })
 );
 
@@ -485,7 +684,8 @@ api.patch(
   requireAuth,
   asyncHandler(async (req, res) => {
     const { cita, esAdmin } = await citaEditable(req, 'cancelar');
-    await query(`UPDATE citas SET estado = 'cancelada', cancelado_en = NOW() WHERE id = $1`, [cita.id]);
+    const r = await query(`UPDATE citas SET estado = 'cancelada', cancelado_en = NOW() WHERE id = $1 AND estado = 'activa'`, [cita.id]);
+    if (!r.rowCount) throw new HttpError(409, 'Esa cita ya no está activa.');
     await notificar('cita', `Cita cancelada · ${cita.usuario_nombre} (${cita.folio})`);
     const actualizada = await obtenerCita(cita.id);
     correoCancelacion(actualizada, esAdmin ? 'administrador' : 'donante');
@@ -501,7 +701,8 @@ api.patch(
     const { cita } = await citaEditable(req, 'reprogramar');
     await withTransaction(async (client) => {
       await validarCupo(client, cita.evento_id, hora, cita.id);
-      await client.query('UPDATE citas SET hora = $2, recordatorio_enviado = FALSE WHERE id = $1', [cita.id, hora]);
+      const r = await client.query(`UPDATE citas SET hora = $2, recordatorio_enviado = FALSE WHERE id = $1 AND estado = 'activa'`, [cita.id, hora]);
+      if (!r.rowCount) throw new HttpError(409, 'Esa cita ya no está activa.');
     });
     await notificar('cita', `Cita reprogramada · ${cita.usuario_nombre} a las ${hora.slice(0, 5)}`);
     const actualizada = await obtenerCita(cita.id);
@@ -544,8 +745,13 @@ api.patch(
     if (!['atendida', 'no_asistio'].includes(req.body.estado)) throw new HttpError(400, 'El estado debe ser "atendida" o "no_asistio".');
     const cita = await obtenerCita(id);
     if (!cita) throw new HttpError(404, 'No encontramos esa cita.');
-    if (cita.estado !== 'activa') throw new HttpError(409, `La cita ya está ${cita.estado}.`);
-    await query('UPDATE citas SET estado = $2 WHERE id = $1', [id, req.body.estado]);
+    if (cita.estado !== 'activa') throw new HttpError(409, `La cita ya está ${cita.estado.replace('_', ' ')}.`);
+    const r = await query(
+      `UPDATE citas c SET estado = $2 FROM eventos e
+       WHERE c.id = $1 AND c.estado = 'activa' AND e.id = c.evento_id AND e.fecha <= CURRENT_DATE`,
+      [id, req.body.estado]
+    );
+    if (!r.rowCount) throw new HttpError(409, 'La asistencia solo se puede registrar a partir del día del evento.');
     res.json(await obtenerCita(id));
   })
 );
@@ -844,6 +1050,98 @@ api.patch(
   })
 );
 
+// ===== Módulo: Administradores =====
+api.get(
+  '/admin/administradores',
+  requireAdmin,
+  asyncHandler(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT u.id, u.nombre, u.apellido, u.correo, u.telefono, u.creado_en,
+              EXISTS (SELECT 1 FROM tokens_recuperacion t
+                      WHERE t.usuario_id = u.id AND t.tipo = 'activacion' AND t.usado_en IS NULL AND t.expira_en > NOW()) AS pendiente,
+              (SELECT MAX(a.creado_en) FROM log_accesos a WHERE a.usuario_id = u.id AND a.exito AND a.motivo = 'ok') AS ultimo_acceso
+       FROM usuarios u WHERE u.rol = 'administrador' ORDER BY u.creado_en`
+    );
+    res.json(rows);
+  })
+);
+
+api.post(
+  '/admin/administradores',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const { nombre, apellido = '', correo, telefono } = req.body || {};
+    requireFields(req.body || {}, ['nombre', 'correo', 'telefono']);
+    validarDatosPersona({ nombre, correo, telefono });
+    const correoNorm = correo.trim().toLowerCase();
+    const {
+      rows: [quien],
+    } = await query('SELECT nombre, apellido FROM usuarios WHERE id = $1', [req.user.id]);
+
+    const resultado = await withTransaction(async (client) => {
+      const {
+        rows: [existente],
+      } = await client.query('SELECT id, nombre, correo, rol FROM usuarios WHERE correo = $1 FOR UPDATE', [correoNorm]);
+      if (existente?.rol === 'administrador') throw new HttpError(409, 'Esa persona ya es administradora.');
+      if (existente) {
+        await client.query(`UPDATE usuarios SET rol = 'administrador', sesion_version = sesion_version + 1 WHERE id = $1`, [existente.id]);
+        return { usuario: existente, accion: 'promovido', url: null };
+      }
+      const {
+        rows: [nuevo],
+      } = await client.query(
+        `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol)
+         VALUES ($1,$2,$3,$4,$5,'administrador') RETURNING id, nombre, correo`,
+        [texto(nombre), texto(apellido).slice(0, 80), correoNorm, String(telefono).trim(), await bcrypt.hash(nuevoToken(), 10)]
+      );
+      return { usuario: nuevo, accion: 'invitado', url: await crearEnlace(client, nuevo.id, 'activacion') };
+    });
+
+    let correo_enviado = null;
+    if (resultado.url) {
+      const r = await correoActivacion(resultado.usuario, resultado.url, `${quien.nombre} ${quien.apellido}`.trim());
+      correo_enviado = r.ok && !r.simulado;
+    }
+    await notificar('admin', `${resultado.usuario.nombre} ahora es administrador`);
+    res.status(201).json({ ok: true, accion: resultado.accion, id: resultado.usuario.id, correo_enviado });
+  })
+);
+
+api.patch(
+  '/admin/administradores/:id/quitar',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const id = toInt(req.params.id, 'id');
+    if (id === req.user.id) throw new HttpError(409, 'No puedes quitarte el acceso a ti mismo.');
+    await withTransaction(async (client) => {
+      const { rows: admins } = await client.query(`SELECT id FROM usuarios WHERE rol = 'administrador' FOR UPDATE`);
+      if (!admins.some((a) => a.id === id)) throw new HttpError(404, 'Ese usuario no es administrador.');
+      if (admins.length <= 1) throw new HttpError(409, 'Debe quedar al menos un administrador.');
+      await client.query(`UPDATE usuarios SET rol = 'donante', sesion_version = sesion_version + 1 WHERE id = $1`, [id]);
+      await client.query(`UPDATE tokens_recuperacion SET usado_en = NOW() WHERE usuario_id = $1 AND tipo = 'activacion' AND usado_en IS NULL`, [id]);
+    });
+    res.json({ ok: true });
+  })
+);
+
+api.get(
+  '/admin/accesos',
+  requireAdmin,
+  asyncHandler(async (req, res) => {
+    const limite = Math.min(Math.max(Number(req.query.limite) || 30, 1), 200);
+    const { rows } = await query(
+      `SELECT a.id, a.correo, a.ip, a.exito, a.motivo, a.creado_en, u.rol
+       FROM log_accesos a LEFT JOIN usuarios u ON u.id = a.usuario_id
+       ORDER BY a.creado_en DESC LIMIT $1`,
+      [limite]
+    );
+    const {
+      rows: [r],
+    } = await query(`SELECT COUNT(*) FILTER (WHERE NOT exito) AS fallidos_24h FROM log_accesos WHERE creado_en > NOW() - interval '24 hours'`);
+    res.json({ accesos: rows, fallidos_24h: r.fallidos_24h });
+  })
+);
+
 // ===== Módulo: Correo =====
 api.get(
   '/correo/estado',
@@ -855,7 +1153,11 @@ api.get(
        FROM log_correos GROUP BY tipo ORDER BY tipo`
     );
     const { rows: ultimos } = await query('SELECT destinatario, asunto, tipo, exito, simulado, error, enviado_en FROM log_correos ORDER BY enviado_en DESC LIMIT 8');
+    const {
+      rows: [cola],
+    } = await query(`SELECT COUNT(*) FILTER (WHERE intentos < 5) AS pendientes, COUNT(*) FILTER (WHERE intentos >= 5) AS agotados FROM cola_correos`);
     res.json({
+      cola,
       configurado: correoConfigurado(),
       conectado: conexion.ok,
       error: conexion.error || null,

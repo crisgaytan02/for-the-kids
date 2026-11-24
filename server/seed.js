@@ -3,16 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import bcrypt from 'bcryptjs';
 import pg from 'pg';
-import { SERVER_DIR, generarFolio, generarHorarios, pool } from './core.js';
+import { SERVER_DIR, adminDesdeEnv, generarFolio, generarHorarios, pool } from './core.js';
 
 // ===== Módulo: Cuentas =====
-const ADMIN = {
-  nombre: 'Cristóbal',
-  apellido: 'Gaytán',
-  correo: 'jairgaytan339@gmail.com',
-  telefono: '33 1234 5678',
-  password: '19082002',
-};
+const ADMIN = adminDesdeEnv();
 
 const DONANTES = [
   ['María Fernanda', 'López Arellano', 'mafer.lopez@gmail.com', 'Girasol.2004'],
@@ -93,13 +87,14 @@ async function main() {
   const db = await pool.connect();
   try {
     console.log('Creando esquema...');
+    await db.query(fs.readFileSync(path.join(SERVER_DIR, 'reset.sql'), 'utf8'));
     await db.query(fs.readFileSync(path.join(SERVER_DIR, 'schema.sql'), 'utf8'));
 
     // ===== Módulo: Usuarios =====
     console.log('Usuarios...');
     const { rows: [admin] } = await db.query(
-      `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol, creado_en)
-       VALUES ($1,$2,$3,$4,$5,'administrador',$6) RETURNING id`,
+      `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol, creado_en, consentimiento_en)
+       VALUES ($1,$2,$3,$4,$5,'administrador',$6,$6) RETURNING id`,
       [ADMIN.nombre, ADMIN.apellido, ADMIN.correo, ADMIN.telefono, await bcrypt.hash(ADMIN.password, 10), INICIO]
     );
 
@@ -109,8 +104,8 @@ async function main() {
         ? entreFechas(INICIO, fecha('2026-09-14', '20:00'))
         : entreFechas(fecha('2026-09-15', '08:00'), fecha('2026-09-28', '20:00'));
       const { rows } = await db.query(
-        `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, creado_en, es_demo)
-         VALUES ($1,$2,$3,$4,$5,$6,TRUE) RETURNING id`,
+        `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, creado_en, es_demo, consentimiento_en)
+         VALUES ($1,$2,$3,$4,$5,$6,TRUE,$6) RETURNING id`,
         [nombre, apellido, correo, telefonoDonante(i), await bcrypt.hash(password, 10), alta]
       );
       donantes.push({ id: rows[0].id, alta });

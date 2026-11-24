@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
 import pg from 'pg';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
@@ -44,6 +45,44 @@ export async function withTransaction(fn) {
   } finally {
     client.release();
   }
+}
+
+export function adminDesdeEnv() {
+  const correo = String(process.env.ADMIN_CORREO || '')
+    .trim()
+    .toLowerCase();
+  const password = process.env.ADMIN_PASSWORD || '';
+  if (!EMAIL_RE.test(correo) || !passwordValida(password)) {
+    throw new Error('Configura ADMIN_CORREO y ADMIN_PASSWORD (mínimo 8 caracteres y al menos un número) en el .env.');
+  }
+  return {
+    nombre: process.env.ADMIN_NOMBRE || 'Administrador',
+    apellido: process.env.ADMIN_APELLIDO || '',
+    correo,
+    telefono: process.env.ADMIN_TELEFONO || '0000000000',
+    password,
+  };
+}
+
+export async function migrar() {
+  await query(fs.readFileSync(path.join(SERVER_DIR, 'schema.sql'), 'utf8'));
+  const { rowCount } = await query(`SELECT 1 FROM usuarios WHERE rol = 'administrador' LIMIT 1`);
+  if (rowCount) return { adminCreado: false };
+  let admin;
+  try {
+    admin = adminDesdeEnv();
+  } catch (err) {
+    console.warn(`No hay ningún administrador. ${err.message}`);
+    return { adminCreado: false };
+  }
+  await query(
+    `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol, consentimiento_en)
+     VALUES ($1,$2,$3,$4,$5,'administrador',NOW())
+     ON CONFLICT (correo) DO UPDATE SET rol = 'administrador', sesion_version = usuarios.sesion_version + 1`,
+    [admin.nombre, admin.apellido, admin.correo, admin.telefono, await bcrypt.hash(admin.password, 10)]
+  );
+  console.log(`Administrador inicial listo: ${admin.correo}`);
+  return { adminCreado: true };
 }
 
 export const SQL_EVENTO = `
@@ -90,6 +129,43 @@ export const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export const LARGO_MIN = 20;
 export const LARGO_MAX = 35;
+export const REGLA_PASSWORD = 'La contraseña debe tener mínimo 8 caracteres y al menos un número.';
+
+export function passwordValida(password) {
+  return typeof password === 'string' && password.length >= 8 && Buffer.byteLength(password) <= 72 && /\d/.test(password);
+}
+
+export const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
+export const nuevoToken = () => crypto.randomBytes(32).toString('hex');
+
+export function limitarPorIp({ max, ventanaMin, soloFallidos = false, mensaje }) {
+  const registros = new Map();
+  return (req, res, next) => {
+    const ahora = Date.now();
+    if (registros.size > 5000) {
+      for (const [k, v] of registros) if (v.reinicio <= ahora) registros.delete(k);
+    }
+    const clave = req.ip || req.socket?.remoteAddress || 'desconocida';
+    let r = registros.get(clave);
+    if (!r || r.reinicio <= ahora) {
+      r = { cuenta: 0, reinicio: ahora + ventanaMin * 60000 };
+      registros.set(clave, r);
+    }
+    if (r.cuenta >= max) {
+      const min = Math.max(1, Math.ceil((r.reinicio - ahora) / 60000));
+      res.setHeader('Retry-After', String(min * 60));
+      return next(new HttpError(429, mensaje || `Demasiados intentos desde tu conexión. Intenta de nuevo en ${min} min.`));
+    }
+    if (soloFallidos) {
+      res.on('finish', () => {
+        if (res.statusCode >= 400) r.cuenta++;
+      });
+    } else {
+      r.cuenta++;
+    }
+    return next();
+  };
+}
 
 export function requireFields(body, fields) {
   const faltantes = fields.filter((f) => body[f] === undefined || body[f] === null || String(body[f]).trim() === '');
@@ -124,13 +200,21 @@ export function generarHorarios(horaInicio, horaFin, duracionMin) {
 export function requireAuth(req, _res, next) {
   const [tipo, token] = (req.headers.authorization || '').split(' ');
   if (tipo !== 'Bearer' || !token) return next(new HttpError(401, 'Necesitas iniciar sesión para continuar.'));
+  let payload;
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = { id: payload.sub, rol: payload.rol, nombre: payload.nombre };
-    return next();
+    payload = jwt.verify(token, process.env.JWT_SECRET);
   } catch {
     return next(new HttpError(401, 'Tu sesión expiró, vuelve a iniciar sesión.'));
   }
+  return query('SELECT id, rol, nombre, sesion_version FROM usuarios WHERE id = $1', [payload.sub])
+    .then(({ rows: [u] }) => {
+      if (!u || (payload.ver ?? 0) !== u.sesion_version) {
+        return next(new HttpError(401, 'Tu sesión ya no es válida, vuelve a iniciar sesión.'));
+      }
+      req.user = { id: u.id, rol: u.rol, nombre: u.nombre };
+      return next();
+    })
+    .catch(next);
 }
 
 export const requireRole = (...roles) => (req, _res, next) => {
@@ -234,31 +318,117 @@ const texto = ({ titulo, intro, cita, cierre }) =>
     'For The Kids · Esperanza en cada mechón',
   ].join('\n');
 
-export async function enviarCorreo({ para, asunto, contenido, tipo }) {
-  const { rows } = await query('SELECT es_demo FROM usuarios WHERE correo = $1', [para]);
-  const esDemo = Boolean(rows[0]?.es_demo);
-  const redireccion = process.env.MAIL_REDIRECT_TO;
-  const destino = esDemo && redireccion ? redireccion : para;
-  const simulado = process.env.NODE_ENV === 'test' || !correoConfigurado() || (esDemo && !redireccion);
-  const mensaje = {
-    from: remitente(),
-    to: destino,
-    subject: destino === para ? asunto : `[Para ${para}] ${asunto}`,
-    html: plantilla(contenido),
-    text: texto(contenido),
-    attachments: fs.existsSync(LOGO) ? [{ filename: 'logo.png', path: LOGO, cid: 'logo-ftk' }] : [],
-  };
+const MAX_INTENTOS_CORREO = 5;
+
+export async function enviarCorreo({ para, asunto, contenido, tipo }, { encolar = true } = {}) {
+  let destino = para;
+  let asuntoFinal = asunto;
+  let simulado = false;
   try {
+    const { rows } = await query('SELECT es_demo FROM usuarios WHERE correo = $1', [para]);
+    const esDemo = Boolean(rows[0]?.es_demo);
+    const redireccion = process.env.MAIL_REDIRECT_TO;
+    destino = esDemo && redireccion ? redireccion : para;
+    asuntoFinal = destino === para ? asunto : `[Para ${para}] ${asunto}`;
+    simulado = process.env.NODE_ENV === 'test' || !correoConfigurado() || (esDemo && !redireccion);
+    const mensaje = {
+      from: remitente(),
+      to: destino,
+      subject: asuntoFinal,
+      html: plantilla(contenido),
+      text: texto(contenido),
+      attachments: fs.existsSync(LOGO) ? [{ filename: 'logo.png', path: LOGO, cid: 'logo-ftk' }] : [],
+    };
     await (simulado ? nodemailer.createTransport({ jsonTransport: true }) : transporte()).sendMail(mensaje);
-    if (process.env.NODE_ENV !== 'test') console.log(`${simulado ? '[simulado] ' : ''}${tipo} → ${destino} | ${mensaje.subject}`);
-    await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, simulado) VALUES ($1,$2,$3,TRUE,$4)', [destino, mensaje.subject, tipo, simulado]);
+    if (process.env.NODE_ENV !== 'test') {
+      console.log(`${simulado ? '[simulado] ' : ''}${tipo} → ${destino} | ${asuntoFinal}`);
+      if (simulado && contenido.boton?.url) console.log(`   enlace: ${contenido.boton.url}`);
+    }
+    await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, simulado) VALUES ($1,$2,$3,TRUE,$4)', [destino, asuntoFinal, tipo, simulado]);
     return { ok: true, simulado, destino };
   } catch (err) {
     console.error(`Falló el correo (${tipo}) a ${destino}: ${err.message}`);
-    await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, error) VALUES ($1,$2,$3,FALSE,$4)', [destino, mensaje.subject, tipo, err.message]).catch(() => {});
-    return { ok: false, error: err.message };
+    await query('INSERT INTO log_correos (destinatario, asunto, tipo, exito, error) VALUES ($1,$2,$3,FALSE,$4)', [
+      destino,
+      asuntoFinal.slice(0, 200),
+      tipo,
+      err.message,
+    ]).catch(() => {});
+    if (encolar) {
+      await query(
+        `INSERT INTO cola_correos (para, tipo, asunto, contenido, ultimo_error, proximo_intento)
+         VALUES ($1,$2,$3,$4,$5, NOW() + interval '5 minutes')`,
+        [para, tipo, asunto.slice(0, 200), JSON.stringify(contenido), err.message]
+      ).catch((e) => console.error(`No se pudo encolar el correo: ${e.message}`));
+    }
+    return { ok: false, error: err.message, encolado: encolar };
   }
 }
+
+export async function procesarColaCorreos() {
+  const { rows } = await query(
+    `SELECT * FROM cola_correos WHERE proximo_intento <= NOW() AND intentos < $1 ORDER BY proximo_intento LIMIT 20`,
+    [MAX_INTENTOS_CORREO]
+  );
+  let enviados = 0;
+  for (const c of rows) {
+    const r = await enviarCorreo({ para: c.para, tipo: c.tipo, asunto: c.asunto, contenido: c.contenido }, { encolar: false });
+    if (r.ok) {
+      await query('DELETE FROM cola_correos WHERE id = $1', [c.id]);
+      enviados++;
+    } else {
+      await query(
+        `UPDATE cola_correos SET intentos = intentos + 1, ultimo_error = $2,
+           proximo_intento = NOW() + (intentos * 10 || ' minutes')::interval WHERE id = $1`,
+        [c.id, r.error]
+      );
+    }
+  }
+  if (rows.length) console.log(`Cola de correos: ${enviados} de ${rows.length} reenviados`);
+  return { revisados: rows.length, enviados };
+}
+
+export const VIGENCIA_RECUPERACION_MIN = 60;
+export const VIGENCIA_ACTIVACION_HORAS = 48;
+
+export const correoRecuperacion = (usuario, url) =>
+  enviarCorreo({
+    para: usuario.correo,
+    tipo: 'recuperacion',
+    asunto: 'Restablece tu contraseña · For The Kids',
+    contenido: {
+      titulo: 'Restablece tu contraseña',
+      intro: `Hola, ${escapar(usuario.nombre)}. Recibimos una solicitud para cambiar la contraseña de tu cuenta. El enlace vence en ${VIGENCIA_RECUPERACION_MIN} minutos y solo funciona una vez.`,
+      cierre: 'Si no fuiste tú, ignora este correo: tu contraseña actual sigue funcionando.',
+      boton: { texto: 'Crear nueva contraseña', url },
+    },
+  });
+
+export const correoActivacion = (usuario, url, invitadoPor) =>
+  enviarCorreo({
+    para: usuario.correo,
+    tipo: 'activacion',
+    asunto: 'Tienes acceso al panel de For The Kids',
+    contenido: {
+      titulo: 'Bienvenido al equipo organizador',
+      intro: `Hola, ${escapar(usuario.nombre)}. ${escapar(invitadoPor)} te dio acceso como administrador de For The Kids. Crea tu contraseña para entrar al panel; el enlace vence en ${VIGENCIA_ACTIVACION_HORAS} horas.`,
+      cierre: 'Si no esperabas este correo, puedes ignorarlo.',
+      boton: { texto: 'Crear mi contraseña', url },
+    },
+  });
+
+export const correoPasswordCambiada = (usuario) =>
+  enviarCorreo({
+    para: usuario.correo,
+    tipo: 'password',
+    asunto: 'Tu contraseña se cambió · For The Kids',
+    contenido: {
+      titulo: 'Tu contraseña se cambió',
+      intro: `Hola, ${escapar(usuario.nombre)}. La contraseña de tu cuenta se actualizó y cerramos las sesiones que tenías abiertas.`,
+      cierre: 'Si no fuiste tú, usa "¿Olvidaste tu contraseña?" en la página de inicio de sesión para recuperar tu cuenta de inmediato.',
+      boton: { texto: 'Iniciar sesión', url: `${APP_URL}/login` },
+    },
+  });
 
 const botonCitas = { texto: 'Ver mis citas', url: `${APP_URL}/mis-citas` };
 
@@ -310,31 +480,37 @@ export const correoCancelacion = (cita, motivo = 'donante') =>
     },
   });
 
-export const correoRecordatorio = (cita) =>
-  enviarCorreo({
-    para: cita.usuario_correo,
-    tipo: 'recordatorio',
-    asunto: `Mañana es tu cita · ${cita.evento_nombre}`,
-    contenido: {
-      titulo: '¡Ya casi es el día!',
-      intro: `Hola, ${escapar(cita.usuario_nombre)}. Te recordamos tu cita de mañana:`,
-      cita,
-      cierre: 'Llega 10 minutos antes con tu cabello limpio y seco. Si ya no puedes ir, cancélala desde "Mis citas" para que alguien más aproveche el lugar.',
-      boton: botonCitas,
+export const correoRecordatorio = (cita, opciones) =>
+  enviarCorreo(
+    {
+      para: cita.usuario_correo,
+      tipo: 'recordatorio',
+      asunto: `Mañana es tu cita · ${cita.evento_nombre}`,
+      contenido: {
+        titulo: '¡Ya casi es el día!',
+        intro: `Hola, ${escapar(cita.usuario_nombre)}. Te recordamos tu cita de mañana:`,
+        cita,
+        cierre: 'Llega 10 minutos antes con tu cabello limpio y seco. Si ya no puedes ir, cancélala desde "Mis citas" para que alguien más aproveche el lugar.',
+        boton: botonCitas,
+      },
     },
-  });
+    opciones
+  );
 
 export const correoPrueba = (para, nombre) =>
-  enviarCorreo({
-    para,
-    tipo: 'prueba',
-    asunto: 'Correo de prueba · For The Kids',
-    contenido: {
-      titulo: `Hola, ${escapar(nombre)}`,
-      intro: 'Si estás leyendo esto, el envío de correos del sistema funciona. Así se verán las confirmaciones, cancelaciones y recordatorios de las citas.',
-      boton: { texto: 'Abrir For The Kids', url: APP_URL },
+  enviarCorreo(
+    {
+      para,
+      tipo: 'prueba',
+      asunto: 'Correo de prueba · For The Kids',
+      contenido: {
+        titulo: `Hola, ${escapar(nombre)}`,
+        intro: 'Si estás leyendo esto, el envío de correos del sistema funciona. Así se verán las confirmaciones, cancelaciones y recordatorios de las citas.',
+        boton: { texto: 'Abrir For The Kids', url: APP_URL },
+      },
     },
-  });
+    { encolar: false }
+  );
 
 // ===== Módulo: Recordatorios =====
 export async function enviarRecordatoriosPendientes() {
@@ -345,7 +521,7 @@ export async function enviarRecordatoriosPendientes() {
   );
   let enviados = 0;
   for (const cita of rows) {
-    const r = await correoRecordatorio(cita);
+    const r = await correoRecordatorio(cita, { encolar: false });
     if (r.ok) {
       await query('UPDATE citas SET recordatorio_enviado = TRUE WHERE id = $1', [cita.id]);
       enviados++;
@@ -358,9 +534,17 @@ export async function enviarRecordatoriosPendientes() {
 export function iniciarRecordatorios() {
   if (process.env.REMINDERS_ENABLED === 'false') return;
   const correr = () => enviarRecordatoriosPendientes().catch((err) => console.error('Recordatorios:', err.message));
+  const reintentar = () => procesarColaCorreos().catch((err) => console.error('Cola de correos:', err.message));
+  const limpiar = () =>
+    query(`DELETE FROM tokens_recuperacion WHERE expira_en < NOW() - interval '7 days'`).catch((err) => console.error('Limpieza de enlaces:', err.message));
   cron.schedule('*/15 * * * *', correr);
-  setTimeout(correr, 5000);
-  console.log('Recordatorios activos (revisa cada 15 minutos)');
+  cron.schedule('*/5 * * * *', reintentar);
+  cron.schedule('30 3 * * *', limpiar);
+  setTimeout(() => {
+    correr();
+    reintentar();
+  }, 5000);
+  console.log('Recordatorios activos (revisa cada 15 minutos) y reintentos de correo cada 5 minutos');
 }
 
 // ===== Módulo: Reporte PDF =====
@@ -385,25 +569,8 @@ const numero = (n) => Number(n || 0).toLocaleString('es-MX', { maximumFractionDi
 const ESTADOS_CITA = { activa: 'Activas', atendida: 'Atendidas', cancelada: 'Canceladas', no_asistio: 'No asistió' };
 const ESTADOS = { activo: 'Activo', finalizado: 'Finalizado', programado: 'Programado', completada: 'Completada', pendiente: 'Pendiente' };
 
-export function generarReportePdf(reporte, generadoPor, stream) {
-  const doc = new PDFDocument({
-    size: 'A4',
-    margins: { top: 50, bottom: 60, left: 50, right: 50 },
-    bufferPages: true,
-    info: { Title: `Reporte For The Kids ${reporte.desde} a ${reporte.hasta}`, Author: 'For The Kids · Equipo Tlaxcala' },
-  });
-  doc.pipe(stream);
-
-  const ancho = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  const x0 = doc.page.margins.left;
-  const limiteY = () => doc.page.height - doc.page.margins.bottom;
-
-  if (fs.existsSync(LOGO)) doc.image(LOGO, x0, 42, { height: 38 });
-  doc.font('Helvetica-Bold').fontSize(16).fillColor(C.noche).text('Reporte de campaña', x0, 46, { width: ancho, align: 'right' });
-  doc.font('Helvetica').fontSize(10).fillColor(C.texto).text(`${fechaCorta(reporte.desde)} – ${fechaCorta(reporte.hasta)}`, x0, 66, { width: ancho, align: 'right' });
-  doc.rect(x0, 92, ancho, 3).fill(C.amarillo);
-
-  const generado = new Date(reporte.generado_en).toLocaleString('es-MX', {
+const fechaHoraLarga = (valor) =>
+  new Date(valor).toLocaleString('es-MX', {
     timeZone: APP_TZ,
     day: 'numeric',
     month: 'long',
@@ -411,90 +578,156 @@ export function generarReportePdf(reporte, generadoPor, stream) {
     hour: '2-digit',
     minute: '2-digit',
   });
-  doc.font('Helvetica').fontSize(9).fillColor(C.tenue).text(`Generado el ${generado} por ${generadoPor}. Los datos corresponden a lo registrado en el sistema en ese momento.`, x0, 104, { width: ancho });
 
-  const est = reporte.citas_por_estado || {};
-  const tarjetas = [
-    ['Citas en el periodo', numero(reporte.citas_total)],
-    ['Citas atendidas', numero(est.atendida || 0)],
-    ['Donaciones de cabello', numero(reporte.donaciones_total)],
-    ['Cabello recolectado', `${numero(reporte.cabello_cm)} cm`],
-  ];
-  const gap = 10;
-  const wTarjeta = (ancho - gap * 3) / 4;
-  let y = 130;
-  tarjetas.forEach(([label, valor], i) => {
-    const x = x0 + i * (wTarjeta + gap);
-    doc.roundedRect(x, y, wTarjeta, 62, 8).fill(i === 0 ? C.amarilloSuave : C.crema);
-    doc.roundedRect(x, y, wTarjeta, 62, 8).lineWidth(0.6).stroke('#EFE6C9');
-    doc.font('Helvetica').fontSize(8.5).fillColor(C.texto).text(label, x + 10, y + 10, { width: wTarjeta - 20 });
-    doc.font('Helvetica-Bold').fontSize(19).fillColor(C.noche).text(valor, x + 10, y + 30, { width: wTarjeta - 20 });
+function crearPdf({ titulo, subtitulo, nota, stream, horizontal = false }) {
+  const doc = new PDFDocument({
+    size: 'A4',
+    layout: horizontal ? 'landscape' : 'portrait',
+    margins: { top: 50, bottom: 60, left: 50, right: 50 },
+    bufferPages: true,
+    info: { Title: `${titulo} · ${subtitulo}`, Author: 'For The Kids · Equipo Tlaxcala' },
   });
-  y += 82;
+  doc.pipe(stream);
 
-  const titulo = (t) => {
-    if (y + 60 > limiteY()) {
+  const ancho = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+  const x0 = doc.page.margins.left;
+  const limiteY = () => doc.page.height - doc.page.margins.bottom;
+  const pdf = { doc, ancho, x0, y: 0 };
+
+  if (fs.existsSync(LOGO)) doc.image(LOGO, x0, 42, { height: 38 });
+  doc.font('Helvetica-Bold').fontSize(16).fillColor(C.noche).text(titulo, x0, 46, { width: ancho, align: 'right' });
+  doc.font('Helvetica').fontSize(10).fillColor(C.texto).text(subtitulo, x0, 66, { width: ancho, align: 'right' });
+  doc.rect(x0, 92, ancho, 3).fill(C.amarillo);
+  doc.font('Helvetica').fontSize(9).fillColor(C.tenue).text(nota, x0, 104, { width: ancho });
+  pdf.y = doc.y + 14;
+
+  pdf.titulo = (t) => {
+    if (pdf.y + 60 > limiteY()) {
       doc.addPage();
-      y = doc.page.margins.top;
+      pdf.y = doc.page.margins.top;
     }
-    doc.font('Helvetica-Bold').fontSize(12).fillColor(C.noche).text(t, x0, y);
-    y += 20;
+    doc.font('Helvetica-Bold').fontSize(12).fillColor(C.noche).text(t, x0, pdf.y);
+    pdf.y += 20;
   };
 
-  const tabla = (columnas, filas, vacio = 'Sin registros en este periodo.') => {
+  pdf.tarjetas = (items) => {
+    const gap = 10;
+    const w = (ancho - gap * (items.length - 1)) / items.length;
+    items.forEach(([label, valor], i) => {
+      const x = x0 + i * (w + gap);
+      doc.roundedRect(x, pdf.y, w, 62, 8).fill(i === 0 ? C.amarilloSuave : C.crema);
+      doc.roundedRect(x, pdf.y, w, 62, 8).lineWidth(0.6).stroke('#EFE6C9');
+      doc.font('Helvetica').fontSize(8.5).fillColor(C.texto).text(label, x + 10, pdf.y + 10, { width: w - 20 });
+      doc.font('Helvetica-Bold').fontSize(19).fillColor(C.noche).text(valor, x + 10, pdf.y + 30, { width: w - 20 });
+    });
+    pdf.y += 82;
+  };
+
+  pdf.tabla = (columnas, filas, vacio = 'Sin registros en este periodo.', altoMin = 18) => {
     const total = columnas.reduce((a, c) => a + c.w, 0);
     const cols = columnas.map((c) => ({ ...c, w: (c.w / total) * ancho }));
     const encabezado = () => {
-      doc.rect(x0, y, ancho, 20).fill(C.noche);
+      doc.rect(x0, pdf.y, ancho, 20).fill(C.noche);
       let x = x0;
       doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#FFFFFF');
       cols.forEach((c) => {
-        doc.text(c.label, x + 6, y + 6, { width: c.w - 12, align: c.align || 'left', lineBreak: false });
+        doc.text(c.label, x + 6, pdf.y + 6, { width: c.w - 12, align: c.align || 'left', lineBreak: false });
         x += c.w;
       });
-      y += 20;
+      pdf.y += 20;
     };
     encabezado();
     if (!filas.length) {
-      doc.font('Helvetica-Oblique').fontSize(9).fillColor(C.tenue).text(vacio, x0 + 6, y + 7);
-      y += 26;
+      doc.font('Helvetica-Oblique').fontSize(9).fillColor(C.tenue).text(vacio, x0 + 6, pdf.y + 7);
+      pdf.y += 26;
       return;
     }
     filas.forEach((fila, i) => {
       doc.font('Helvetica').fontSize(8.5);
-      const alto = Math.max(18, ...cols.map((c, j) => doc.heightOfString(String(fila[j] ?? ''), { width: c.w - 12 }) + 9));
-      if (y + alto > limiteY()) {
+      const alto = Math.max(altoMin, ...cols.map((c, j) => doc.heightOfString(String(fila[j] ?? ''), { width: c.w - 12 }) + 9));
+      if (pdf.y + alto > limiteY()) {
         doc.addPage();
-        y = doc.page.margins.top;
+        pdf.y = doc.page.margins.top;
         encabezado();
       }
-      if (i % 2 === 1) doc.rect(x0, y, ancho, alto).fill('#FAFBFC');
+      if (i % 2 === 1) doc.rect(x0, pdf.y, ancho, alto).fill('#FAFBFC');
       let x = x0;
       cols.forEach((c, j) => {
         const valor = String(fila[j] ?? '');
-        doc.font(c.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor(c.color ? c.color(valor) : C.noche).text(valor, x + 6, y + 5, { width: c.w - 12, align: c.align || 'left' });
+        if (c.casilla) {
+          doc.rect(x + (c.w - 12) / 2, pdf.y + (alto - 12) / 2, 12, 12).lineWidth(0.8).stroke(C.noche);
+        } else if (c.linea) {
+          doc.moveTo(x + 8, pdf.y + alto - 6).lineTo(x + c.w - 8, pdf.y + alto - 6).lineWidth(0.6).stroke(C.tenue);
+        } else {
+          doc
+            .font(c.bold ? 'Helvetica-Bold' : 'Helvetica')
+            .fontSize(8.5)
+            .fillColor(c.color ? c.color(valor) : C.noche)
+            .text(valor, x + 6, pdf.y + 5, { width: c.w - 12, align: c.align || 'left' });
+        }
         x += c.w;
       });
-      doc.moveTo(x0, y + alto).lineTo(x0 + ancho, y + alto).lineWidth(0.5).stroke(C.linea);
-      y += alto;
+      doc.moveTo(x0, pdf.y + alto).lineTo(x0 + ancho, pdf.y + alto).lineWidth(0.5).stroke(C.linea);
+      pdf.y += alto;
     });
-    y += 18;
+    pdf.y += 18;
   };
 
-  const colorEstado = (v) =>
-    ['Completada', 'Finalizado', 'Activo', 'Atendidas'].includes(v) ? C.verde : ['Pendiente', 'Programado', 'Activas'].includes(v) ? C.naranja : ['Canceladas', 'No asistió'].includes(v) ? C.rojo : C.noche;
+  pdf.terminar = () => {
+    const { start, count } = doc.bufferedPageRange();
+    for (let i = start; i < start + count; i++) {
+      doc.switchToPage(i);
+      const margen = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      const yPie = doc.page.height - 40;
+      doc.moveTo(x0, yPie - 6).lineTo(x0 + ancho, yPie - 6).lineWidth(0.5).stroke(C.linea);
+      doc.font('Helvetica').fontSize(8).fillColor(C.tenue);
+      doc.text('For The Kids · Esperanza en cada mechón', x0, yPie, { width: ancho / 2, lineBreak: false });
+      doc.text(`Página ${i - start + 1} de ${count}`, x0 + ancho / 2, yPie, { width: ancho / 2, align: 'right', lineBreak: false });
+      doc.page.margins.bottom = margen;
+    }
+    doc.end();
+  };
 
-  titulo('Citas por estado');
+  return pdf;
+}
+
+const colorEstado = (v) =>
+  ['Completada', 'Finalizado', 'Activo', 'Atendidas', 'Atendida'].includes(v)
+    ? C.verde
+    : ['Pendiente', 'Programado', 'Activas', 'Activa'].includes(v)
+      ? C.naranja
+      : ['Canceladas', 'No asistió'].includes(v)
+        ? C.rojo
+        : C.noche;
+
+export function generarReportePdf(reporte, generadoPor, stream) {
+  const pdf = crearPdf({
+    titulo: 'Reporte de campaña',
+    subtitulo: `${fechaCorta(reporte.desde)} – ${fechaCorta(reporte.hasta)}`,
+    nota: `Generado el ${fechaHoraLarga(reporte.generado_en)} por ${generadoPor}. Los datos corresponden a lo registrado en el sistema en ese momento.`,
+    stream,
+  });
+
+  const est = reporte.citas_por_estado || {};
+  pdf.tarjetas([
+    ['Citas en el periodo', numero(reporte.citas_total)],
+    ['Citas atendidas', numero(est.atendida || 0)],
+    ['Donaciones de cabello', numero(reporte.donaciones_total)],
+    ['Cabello recolectado', `${numero(reporte.cabello_cm)} cm`],
+  ]);
+
+  pdf.titulo('Citas por estado');
   const totalCitas = Number(reporte.citas_total) || 0;
-  tabla(
+  pdf.tabla(
     [{ label: 'Estado', w: 3, color: colorEstado }, { label: 'Citas', w: 1, align: 'right' }, { label: '% del total', w: 1, align: 'right' }],
     Object.entries(ESTADOS_CITA)
       .filter(([k]) => est[k])
       .map(([k, label]) => [label, numero(est[k]), totalCitas ? `${Math.round((est[k] / totalCitas) * 100)}%` : '0%'])
   );
 
-  titulo('Cabello recolectado');
-  tabla(
+  pdf.titulo('Cabello recolectado');
+  pdf.tabla(
     [{ label: 'Indicador', w: 3 }, { label: 'Valor', w: 1.4, align: 'right' }],
     reporte.donaciones_total
       ? [
@@ -507,8 +740,8 @@ export function generarReportePdf(reporte, generadoPor, stream) {
       : []
   );
 
-  titulo('Eventos del periodo');
-  tabla(
+  pdf.titulo('Eventos del periodo');
+  pdf.tabla(
     [
       { label: 'Evento', w: 2.5, bold: true },
       { label: 'Fecha', w: 1.3 },
@@ -521,8 +754,8 @@ export function generarReportePdf(reporte, generadoPor, stream) {
     reporte.eventos.map((e) => [e.nombre, fechaCorta(e.fecha), `${e.centro}, ${e.ciudad}`, `${e.inscritos}/${e.cupo_total}`, e.atendidas, e.donaciones, ESTADOS[e.estado] || e.estado])
   );
 
-  titulo(`Detalle de donaciones (${reporte.donaciones.length})`);
-  tabla(
+  pdf.titulo(`Detalle de donaciones (${reporte.donaciones.length})`);
+  pdf.tabla(
     [
       { label: 'Fecha', w: 1.2 },
       { label: 'Donante', w: 2.8 },
@@ -533,17 +766,44 @@ export function generarReportePdf(reporte, generadoPor, stream) {
     reporte.donaciones.map((d) => [fechaCorta(d.fecha), d.donante, `${numero(d.largo_cm)} cm`, d.evento, ESTADOS[d.estado] || d.estado])
   );
 
-  const { start, count } = doc.bufferedPageRange();
-  for (let i = start; i < start + count; i++) {
-    doc.switchToPage(i);
-    const margen = doc.page.margins.bottom;
-    doc.page.margins.bottom = 0;
-    const yPie = doc.page.height - 40;
-    doc.moveTo(x0, yPie - 6).lineTo(x0 + ancho, yPie - 6).lineWidth(0.5).stroke(C.linea);
-    doc.font('Helvetica').fontSize(8).fillColor(C.tenue);
-    doc.text('For The Kids · Esperanza en cada mechón', x0, yPie, { width: ancho / 2, lineBreak: false });
-    doc.text(`Página ${i - start + 1} de ${count}`, x0 + ancho / 2, yPie, { width: ancho / 2, align: 'right', lineBreak: false });
-    doc.page.margins.bottom = margen;
-  }
-  doc.end();
+  pdf.terminar();
+}
+
+const ESTADO_ASISTENTE = { activa: 'Activa', atendida: 'Atendida' };
+
+export function generarListaAsistentesPdf(evento, asistentes, generadoPor, stream) {
+  const pdf = crearPdf({
+    titulo: 'Lista de asistentes',
+    subtitulo: `${evento.nombre} · ${fechaCorta(evento.fecha)} · ${evento.hora_inicio}–${evento.hora_fin}`,
+    nota: `${evento.centro}, ${evento.direccion}, ${evento.ciudad}. Generada el ${fechaHoraLarga(new Date())} por ${generadoPor}. Respaldo impreso para registrar asistencia y largo del cabello si falla la conexión.`,
+    stream,
+    horizontal: true,
+  });
+
+  pdf.tarjetas([
+    ['Citas agendadas', numero(asistentes.length)],
+    ['Ya atendidas', numero(asistentes.filter((a) => a.estado === 'atendida').length)],
+    ['Cupo total', numero(evento.cupo_total)],
+    ['Lugares libres', numero(Math.max(evento.cupo_total - asistentes.length, 0))],
+  ]);
+
+  pdf.titulo('Donantes por horario');
+  pdf.tabla(
+    [
+      { label: '#', w: 0.5, align: 'right' },
+      { label: 'Hora', w: 0.9, bold: true },
+      { label: 'Folio', w: 1.1 },
+      { label: 'Donante', w: 3 },
+      { label: 'Teléfono', w: 1.6 },
+      { label: 'Estado', w: 1.1, color: colorEstado },
+      { label: 'Asistió', w: 0.9, casilla: true },
+      { label: 'Largo (cm)', w: 1.2, linea: true },
+      { label: 'Observaciones', w: 2.6, linea: true },
+    ],
+    asistentes.map((a, i) => [i + 1, a.hora, a.folio, `${a.nombre} ${a.apellido}`.trim(), a.telefono, ESTADO_ASISTENTE[a.estado] || a.estado, '', '', '']),
+    'Este evento todavía no tiene citas agendadas.',
+    24
+  );
+
+  pdf.terminar();
 }

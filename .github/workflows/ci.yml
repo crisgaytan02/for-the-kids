@@ -21,6 +21,8 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/forthekids
       JWT_SECRET: secreto-solo-para-ci
       REMINDERS_ENABLED: 'false'
+      ADMIN_CORREO: admin.ci@ejemplo.test
+      ADMIN_PASSWORD: AdminCi2026
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,5 +31,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run db:init
-      - run: npm test
+      - run: npm run db:migrate
+      - run: npm run test:cobertura
       - run: npm run build
