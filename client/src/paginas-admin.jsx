@@ -1005,7 +1005,7 @@ export function Citas() {
         <EmptyState titulo="No hay citas aquí" texto="Prueba con otro estado o búsqueda." />
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table--acciones">
             <thead>
               <tr>
                 <th>Donante</th>
