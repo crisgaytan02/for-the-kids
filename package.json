@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "node --watch-path=server server/index.js --dev",
     "build": "vite build",
+    "postinstall": "vite build",
     "start": "node server/index.js",
     "db:init": "node server/seed.js",
     "db:migrate": "node server/migrar.js",

@@ -1,6 +1,7 @@
 // ===== Módulo: Aplicación =====
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import { APP_URL, ROOT_DIR, UPLOADS_DIR, iniciarRecordatorios, migrar, verificarCorreo } from './core.js';
@@ -59,6 +60,54 @@ app.use('/api', manejarErrores);
 export default app;
 
 // ===== Módulo: Página web =====
+const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const MINUTOS_CANDADO_VENCIDO = 5;
+
+async function compilarPagina(clientDir, dist) {
+  const { build } = await import('vite');
+  const { default: config } = await import(pathToFileURL(path.join(ROOT_DIR, 'vite.config.js')).href);
+  const temporal = path.join(clientDir, `.dist-${process.pid}`);
+  try {
+    await build({ ...config, configFile: false, logLevel: 'warn', build: { ...config.build, outDir: temporal, emptyOutDir: true } });
+    fs.rmSync(dist, { recursive: true, force: true });
+    fs.cpSync(temporal, dist, { recursive: true });
+  } finally {
+    fs.rmSync(temporal, { recursive: true, force: true });
+  }
+}
+
+async function asegurarPagina(clientDir, dist) {
+  const indice = path.join(dist, 'index.html');
+  if (fs.existsSync(indice)) return true;
+  const candado = path.join(clientDir, '.compilando');
+  try {
+    const { mtimeMs } = fs.statSync(candado);
+    if (Date.now() - mtimeMs > MINUTOS_CANDADO_VENCIDO * 60000) fs.rmSync(candado, { recursive: true, force: true });
+  } catch {}
+  try {
+    fs.mkdirSync(candado);
+  } catch {
+    console.log('Otro proceso está compilando la página; esperando...');
+    for (let i = 0; i < 180; i++) {
+      await esperar(1000);
+      if (fs.existsSync(indice)) return true;
+    }
+    console.error('La página no terminó de compilarse a tiempo.');
+    return false;
+  }
+  try {
+    console.log('No existe client/dist: compilando la página...');
+    await compilarPagina(clientDir, dist);
+    console.log('Página compilada.');
+    return true;
+  } catch (err) {
+    console.error(`No se pudo compilar la página: ${err.message}`);
+    return false;
+  } finally {
+    fs.rmSync(candado, { recursive: true, force: true });
+  }
+}
+
 async function montarFrontend(desarrollo) {
   const clientDir = path.join(ROOT_DIR, 'client');
   if (desarrollo) {
@@ -68,17 +117,7 @@ async function montarFrontend(desarrollo) {
     return;
   }
   const dist = path.join(clientDir, 'dist');
-  if (!fs.existsSync(path.join(dist, 'index.html'))) {
-    console.log('No existe client/dist: compilando la página...');
-    try {
-      const { build } = await import('vite');
-      await build({ configFile: path.join(ROOT_DIR, 'vite.config.js'), logLevel: 'warn' });
-      console.log('Página compilada.');
-    } catch (err) {
-      console.error(`No se pudo compilar la página: ${err.message}`);
-      return;
-    }
-  }
+  if (!(await asegurarPagina(clientDir, dist))) return;
   app.use(express.static(dist, { redirect: false }));
   app.get(/^\/(?!api|uploads).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
