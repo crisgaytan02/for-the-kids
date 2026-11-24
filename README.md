@@ -45,8 +45,10 @@ for-the-kids/
     ├── index.js          # arranque del servidor (API + página)
     ├── core.js           # configuración, BD, validaciones, sesión, correos, recordatorios y PDF
     ├── api.js            # todas las rutas de la API
-    ├── schema.sql        # tablas de la base de datos
-    ├── seed.js           # crea las tablas y carga los datos de la campaña
+    ├── schema.sql        # tablas de la base de datos (se puede correr varias veces sin borrar nada)
+    ├── reset.sql         # borra las tablas; solo lo usa el seed
+    ├── migrar.js         # actualiza la base sin borrar datos (npm run db:migrate)
+    ├── seed.js           # borra, crea las tablas y carga los datos de la campaña
     ├── api.test.js       # pruebas de integración
     └── assets/logo.png   # logo que va dentro de los correos
 ```
@@ -64,7 +66,7 @@ Necesitas **Node 22 LTS** y **PostgreSQL 16 con pgAdmin**.
    ```bash
    npm install
    ```
-3. Copia `.env.example` como `.env` (en la raíz del proyecto). Pon tu contraseña de Postgres en `DATABASE_URL` y cambia `JWT_SECRET` por cualquier texto largo.
+3. Copia `.env.example` como `.env` (en la raíz del proyecto). Pon tu contraseña de Postgres en `DATABASE_URL`, cambia `JWT_SECRET` por cualquier texto largo y llena `ADMIN_CORREO` y `ADMIN_PASSWORD` (mínimo 8 caracteres y un número): con esos datos se crea la cuenta de administrador.
 4. En pgAdmin crea la base `forthekids` (clic derecho en *Databases → Create → Database*). Si no la creas, el siguiente paso intenta crearla solo.
 5. Crea las tablas y carga los datos:
    ```bash
@@ -80,8 +82,15 @@ Con `npm run dev` los cambios del front se ven al guardar, y el servidor se rein
 
 ### Cuentas
 
-- **Administrador:** Cristóbal Gaytán · `jairgaytan339@gmail.com`
-- **Donantes:** las 28 cuentas con sus contraseñas están al inicio de `server/seed.js`.
+- **Administrador:** el que configures en `ADMIN_CORREO` / `ADMIN_PASSWORD` del `.env` (las credenciales ya no viven en el código). Más administradores se agregan desde **Configuración → Administradores**.
+- **Donantes:** las 28 cuentas demo con sus contraseñas están al inicio de `server/seed.js`.
+
+### Comandos de base de datos
+
+| Comando | Qué hace |
+|---|---|
+| `npm run db:init` | **Borra todo** y carga los datos demo. Solo para desarrollo o para la presentación. |
+| `npm run db:migrate` | Crea o actualiza tablas **sin borrar datos** y crea el admin del `.env` si no hay ninguno. El servidor también lo corre solo al arrancar. |
 
 Toda la actividad del seed (registros, eventos, citas y donaciones) cae entre el **12 de septiembre y el 1 de octubre de 2026**. Los eventos próximos se registraron en esas fechas, pero se calculan a partir del día en que corres el seed para que siempre haya fechas para agendar.
 
@@ -99,6 +108,11 @@ El sistema manda correo cuando:
 | El admin cancela una cita | El donante, avisando que la canceló el equipo |
 | El admin da de baja un evento con citas | Todos los donantes con cita activa en ese evento |
 | Faltan 20–24 h para la cita | El donante (recordatorio; el servidor revisa cada 15 min) |
+| Pide recuperar su contraseña | El usuario, con un enlace de un solo uso que vence en 60 min |
+| Cambia o restablece su contraseña | El usuario, avisando del cambio |
+| Un admin lo da de alta como administrador | La persona invitada, con enlace para crear su contraseña (vence en 48 h) |
+
+Si un correo falla (SMTP caído, límite de Gmail, etc.) queda en la bitácora y entra a una **cola de reintentos**: el servidor lo vuelve a intentar cada 5 minutos, hasta 5 veces. En **Configuración → Correo** se ve cuántos están en espera.
 
 ### Configurarlo con Gmail
 
@@ -132,7 +146,7 @@ npm run db:init   # las pruebas usan los datos del seed
 npm test
 ```
 
-Son 13 pruebas de integración que llaman directo a la API y validan los criterios medibles del SRS, incluyendo concurrencia de cupo, el rango de 20 a 35 cm y el registro de correos.
+Son 26 pruebas de integración que llaman directo a la API y validan los criterios medibles del SRS (concurrencia de cupo, rango de 20 a 35 cm, registro de correos) y las mejoras de la versión 2: recuperación y cambio de contraseña, alta de administradores, bitácora de accesos, límite por IP, cola de reintentos de correo y lista de asistentes en PDF. `npm run test:cobertura` muestra además la cobertura.
 
 ---
 
@@ -166,6 +180,14 @@ Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador
 | POST | `/auth/registro` | Crear cuenta de donante |
 | POST | `/auth/login` | Iniciar sesión |
 | GET | `/auth/yo` 🔒 | Datos de la sesión |
+| POST | `/auth/recuperar` | Manda el enlace para restablecer la contraseña |
+| POST | `/auth/restablecer/validar` | Revisa si el enlace sigue vigente |
+| POST | `/auth/restablecer` | Guarda la nueva contraseña (`{ token, password }`) |
+| PATCH | `/auth/password` 🔒 | Cambiar contraseña con la actual |
+| GET/POST | `/admin/administradores` 👑 | Ver administradores / dar acceso |
+| PATCH | `/admin/administradores/:id/quitar` 👑 | Quitar acceso al panel |
+| GET | `/admin/accesos` 👑 | Bitácora de inicios de sesión con IP |
+| GET | `/eventos/:id/asistentes/pdf` 👑 | Lista de asistentes imprimible |
 | GET | `/eventos` | Eventos vigentes |
 | GET | `/eventos/:id` | Detalle con horarios disponibles |
 | GET | `/eventos/admin/todos` 👑 | Todos los eventos con métricas |
@@ -202,9 +224,19 @@ Todas van bajo `/api`. 🔒 pide sesión; 👑 además pide rol de administrador
 - **Los porcentajes del dashboard comparan los últimos 30 días contra los 30 anteriores**, porque con mes calendario todo salía en 0% a principio de mes.
 - **Las gráficas son SVG hechos a mano**; Chart.js agregaba ~200 kb por dos gráficas.
 
-## Pendientes para la V2
+## Versión 2 (mejoras sobre el SRS)
 
-- Recuperar contraseña por correo.
+- **Recuperar contraseña** por correo con enlace de un solo uso y cambio de contraseña desde el perfil. Al cambiarla se cierran las demás sesiones.
+- **Alta de administradores** desde el panel, por invitación (la persona crea su propia contraseña).
+- **Sesión verificada contra la BD:** si a alguien le quitan el rol o cambia su contraseña, su token deja de servir al instante.
+- **Seguridad:** límite de intentos por IP, bitácora de accesos con IP, cabeceras de seguridad y consentimiento de datos guardado con fecha.
+- **Correos con reintentos automáticos.**
+- **Modo sin conexión (PWA):** la app se puede instalar y, si se cae la señal en el evento, sigue mostrando eventos, puntos y citas guardados.
+- **Lista de asistentes imprimible** por evento, con casillas de asistencia y largo del cabello, como respaldo en papel.
+- **"Recordarme"**: si no se marca, la sesión se borra al cerrar el navegador.
+
+## Pendientes
+
 - Recordatorios por WhatsApp.
 
 ---
@@ -215,7 +247,7 @@ En producción Express sirve la página compilada (`client/dist`), así que todo
 
 - **Build:** `npm install && npm run build`
 - **Start:** `npm start` (archivo de entrada: `server/index.js`)
-- **Variables:** `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL` (la URL pública), `APP_TZ=America/Mexico_City` y las `SMTP_*` para los correos.
-- Después del primer despliegue se corre una vez `npm run db:init` (borra y vuelve a crear las tablas).
+- **Variables:** `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL` (la URL pública, se usa en los enlaces de los correos), `APP_TZ=America/Mexico_City`, `ADMIN_CORREO`, `ADMIN_PASSWORD`, las `SMTP_*` y `TRUST_PROXY=1` (Render, Hostinger y casi todos los hostings ponen un proxy delante; sin esto el límite por IP vería a todos con la misma IP).
+- Las tablas se crean solas al arrancar (`db:migrate`). Solo si quieren los datos demo corran `npm run db:init`, que **borra todo**.
 
 Sirve igual en Render + Neon o en Hostinger (plan Business/Cloud con Node.js) + Neon. Las imágenes que sube el admin se guardan en `server/uploads`; en hostings con disco temporal se pierden al redeplegar.

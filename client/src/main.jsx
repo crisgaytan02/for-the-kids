@@ -20,8 +20,8 @@ import {
 } from 'lucide-react';
 import ReactDOM from 'react-dom/client';
 import { api, AuthProvider, useAuth } from './core';
-import { BeeHeart, EmptyState, Logo, ToastProvider } from './ui';
-import { EventoDetalle, Eventos, Landing, Login, MisCitas, MisDonaciones, Perfil, Puntos, Registro } from './paginas-sitio';
+import { AvisoSinConexion, BeeHeart, EmptyState, Logo, ToastProvider } from './ui';
+import { EventoDetalle, Eventos, Landing, Login, MisCitas, MisDonaciones, Perfil, Puntos, Recuperar, Registro, Restablecer } from './paginas-sitio';
 import {
   Citas,
   Configuracion,
@@ -533,6 +533,15 @@ export function App() {
           </SoloInvitados>
         }
       />
+      <Route
+        path="recuperar"
+        element={
+          <SoloInvitados>
+            <Recuperar />
+          </SoloInvitados>
+        }
+      />
+      <Route path="restablecer" element={<Restablecer />} />
 
       <Route path="admin" element={<RequireAdmin />}>
         <Route element={<AdminLayout />}>
@@ -553,12 +562,19 @@ export function App() {
 }
 
 // ===== Módulo: Arranque =====
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => console.warn('No se pudo activar el modo sin conexión:', err.message));
+  });
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
           <App />
+          <AvisoSinConexion />
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

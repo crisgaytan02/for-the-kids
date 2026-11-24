@@ -1,14 +1,5 @@
--- ===== Módulo: Limpieza =====
-DROP TABLE IF EXISTS log_correos CASCADE;
-DROP TABLE IF EXISTS notificaciones CASCADE;
-DROP TABLE IF EXISTS donaciones CASCADE;
-DROP TABLE IF EXISTS citas CASCADE;
-DROP TABLE IF EXISTS eventos CASCADE;
-DROP TABLE IF EXISTS puntos_recoleccion CASCADE;
-DROP TABLE IF EXISTS usuarios CASCADE;
-
 -- ===== Módulo: Usuarios =====
-CREATE TABLE usuarios (
+CREATE TABLE IF NOT EXISTS usuarios (
   id                SERIAL PRIMARY KEY,
   nombre            VARCHAR(80)  NOT NULL,
   apellido          VARCHAR(80)  NOT NULL,
@@ -24,7 +15,7 @@ CREATE TABLE usuarios (
 );
 
 -- ===== Módulo: Puntos de recolección =====
-CREATE TABLE puntos_recoleccion (
+CREATE TABLE IF NOT EXISTS puntos_recoleccion (
   id        SERIAL PRIMARY KEY,
   nombre    VARCHAR(120) NOT NULL,
   zona      VARCHAR(120),
@@ -37,7 +28,7 @@ CREATE TABLE puntos_recoleccion (
 );
 
 -- ===== Módulo: Eventos =====
-CREATE TABLE eventos (
+CREATE TABLE IF NOT EXISTS eventos (
   id                    SERIAL PRIMARY KEY,
   nombre                VARCHAR(140) NOT NULL,
   descripcion           TEXT,
@@ -61,7 +52,7 @@ CREATE TABLE eventos (
 );
 
 -- ===== Módulo: Citas =====
-CREATE TABLE citas (
+CREATE TABLE IF NOT EXISTS citas (
   id                   SERIAL PRIMARY KEY,
   folio                CHAR(8)     NOT NULL UNIQUE,
   usuario_id           INT         NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
@@ -74,11 +65,11 @@ CREATE TABLE citas (
   cancelado_en         TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX ux_cita_activa_por_evento ON citas (usuario_id, evento_id) WHERE estado = 'activa';
-CREATE INDEX ix_citas_evento_hora ON citas (evento_id, hora) WHERE estado IN ('activa', 'atendida');
+CREATE UNIQUE INDEX IF NOT EXISTS ux_cita_activa_por_evento ON citas (usuario_id, evento_id) WHERE estado = 'activa';
+CREATE INDEX IF NOT EXISTS ix_citas_evento_hora ON citas (evento_id, hora) WHERE estado IN ('activa', 'atendida');
 
 -- ===== Módulo: Donaciones de cabello =====
-CREATE TABLE donaciones (
+CREATE TABLE IF NOT EXISTS donaciones (
   id             SERIAL PRIMARY KEY,
   cita_id        INT          NOT NULL UNIQUE REFERENCES citas(id) ON DELETE CASCADE,
   usuario_id     INT          NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
@@ -91,7 +82,7 @@ CREATE TABLE donaciones (
 );
 
 -- ===== Módulo: Notificaciones =====
-CREATE TABLE notificaciones (
+CREATE TABLE IF NOT EXISTS notificaciones (
   id        SERIAL PRIMARY KEY,
   tipo      VARCHAR(30)  NOT NULL,
   mensaje   VARCHAR(200) NOT NULL,
@@ -100,7 +91,7 @@ CREATE TABLE notificaciones (
 );
 
 -- ===== Módulo: Bitácora de correos =====
-CREATE TABLE log_correos (
+CREATE TABLE IF NOT EXISTS log_correos (
   id           SERIAL PRIMARY KEY,
   destinatario VARCHAR(160) NOT NULL,
   asunto       VARCHAR(200) NOT NULL,
@@ -109,4 +100,47 @@ CREATE TABLE log_correos (
   simulado     BOOLEAN      NOT NULL DEFAULT FALSE,
   error        TEXT,
   enviado_en   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ===== Módulo: Migraciones de la versión 2 =====
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS consentimiento_en TIMESTAMPTZ;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sesion_version INT NOT NULL DEFAULT 0;
+
+-- ===== Módulo: Recuperación de contraseña =====
+CREATE TABLE IF NOT EXISTS tokens_recuperacion (
+  id         SERIAL PRIMARY KEY,
+  usuario_id INT         NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  token_hash CHAR(64)    NOT NULL UNIQUE,
+  tipo       VARCHAR(15) NOT NULL DEFAULT 'recuperacion' CHECK (tipo IN ('recuperacion', 'activacion')),
+  expira_en  TIMESTAMPTZ NOT NULL,
+  usado_en   TIMESTAMPTZ,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_tokens_usuario ON tokens_recuperacion (usuario_id) WHERE usado_en IS NULL;
+
+-- ===== Módulo: Bitácora de accesos =====
+CREATE TABLE IF NOT EXISTS log_accesos (
+  id         SERIAL PRIMARY KEY,
+  correo     VARCHAR(160) NOT NULL,
+  usuario_id INT REFERENCES usuarios(id) ON DELETE SET NULL,
+  ip         VARCHAR(64),
+  exito      BOOLEAN      NOT NULL,
+  motivo     VARCHAR(30)  NOT NULL,
+  creado_en  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ix_log_accesos_fecha ON log_accesos (creado_en DESC);
+
+-- ===== Módulo: Cola de reintentos de correo =====
+CREATE TABLE IF NOT EXISTS cola_correos (
+  id              SERIAL PRIMARY KEY,
+  para            VARCHAR(160) NOT NULL,
+  tipo            VARCHAR(30)  NOT NULL,
+  asunto          VARCHAR(200) NOT NULL,
+  contenido       JSONB        NOT NULL,
+  intentos        INT          NOT NULL DEFAULT 1,
+  ultimo_error    TEXT,
+  proximo_intento TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  creado_en       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );

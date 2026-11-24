@@ -1,0 +1,16 @@
+{
+  "name": "For The Kids · Donación de cabello",
+  "short_name": "For The Kids",
+  "description": "Agenda tu donación de cabello para pelucas oncológicas infantiles.",
+  "lang": "es-MX",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FFFDF7",
+  "theme_color": "#F9C62D",
+  "icons": [
+    { "src": "/img/icono-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/img/icono-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/img/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

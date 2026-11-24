@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   CalendarDays,
@@ -642,7 +642,7 @@ export function Login() {
     setError('');
     setEnviando(true);
     try {
-      const u = await login(form.correo, form.password);
+      const u = await login(form.correo, form.password, form.recordar);
       const destino = location.state?.from;
       navigate(u.rol === 'administrador' ? '/admin' : destino || '/mis-citas', {
         replace: true,
@@ -709,9 +709,17 @@ export function Login() {
           <label className="check">
             <input type="checkbox" name="recordar" checked={form.recordar} onChange={onChange} /> Recordarme
           </label>
-          <span className="tiny" title="Escríbenos a soporte@forthekids.org">
+          <Link
+            to="/recuperar"
+            state={{ correo: form.correo }}
+            className="tiny"
+            style={{
+              fontWeight: 600,
+              color: 'var(--tx)',
+            }}
+          >
             ¿Olvidaste tu contraseña?
-          </span>
+          </Link>
         </div>
         <Button type="submit" block disabled={enviando || !form.correo || !form.password}>
           {enviando ? 'Entrando…' : 'Iniciar sesión'}
@@ -740,8 +748,204 @@ export function Login() {
   );
 }
 
-// ===== Módulo: Registro =====
+// ===== Módulo: Recuperar contraseña =====
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const passwordSegura = (p) => p.length >= 8 && /\d/.test(p);
+
+export function Recuperar() {
+  const location = useLocation();
+  const [correo, setCorreo] = useState(location.state?.correo || '');
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState('');
+  const [mensaje, setMensaje] = useState('');
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!EMAIL_RE.test(correo.trim())) {
+      setError('Revisa que el correo esté bien escrito.');
+      return;
+    }
+    setEnviando(true);
+    try {
+      const r = await api.post('/auth/recuperar', { correo: correo.trim() });
+      setMensaje(r.mensaje);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  };
+  return (
+    <AuthShell titulo="Recupera el acceso a tu cuenta" texto="Te enviaremos un enlace a tu correo para que crees una contraseña nueva.">
+      <div className="stack" style={{ '--gap': '6px' }}>
+        <h2 className="h1">¿Olvidaste tu contraseña?</h2>
+        <p className="muted">Escribe el correo con el que te registraste.</p>
+      </div>
+
+      {error && (
+        <Alert tipo="error" titulo="No pudimos continuar">
+          {error}
+        </Alert>
+      )}
+
+      {mensaje ? (
+        <>
+          <Alert tipo="exito" titulo="Revisa tu correo">
+            {mensaje} Si no lo ves, busca también en spam o promociones.
+          </Alert>
+          <Button variant="ghost" block icon={RefreshCw} onClick={() => setMensaje('')}>
+            Enviar otro enlace
+          </Button>
+        </>
+      ) : (
+        <form className="stack" onSubmit={onSubmit} noValidate>
+          <Field label="Correo electrónico">
+            <div className="input-icon">
+              <Mail size={17} />
+              <input
+                className="input"
+                type="email"
+                name="correo"
+                placeholder="nombre@correo.com"
+                autoComplete="email"
+                value={correo}
+                onChange={(e) => setCorreo(e.target.value)}
+                required
+              />
+            </div>
+          </Field>
+          <Button type="submit" block disabled={enviando || !correo}>
+            {enviando ? 'Enviando…' : 'Enviar enlace'}
+          </Button>
+        </form>
+      )}
+
+      <p className="muted" style={{ textAlign: 'center', fontSize: '0.9rem' }}>
+        <Link to="/login" style={{ fontWeight: 700, color: 'var(--tx)', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <ArrowLeft size={14} aria-hidden />
+          Volver a iniciar sesión
+        </Link>
+      </p>
+    </AuthShell>
+  );
+}
+
+export function Restablecer() {
+  const [params] = useSearchParams();
+  const [token] = useState(() => params.get('token') || '');
+  const [estado, setEstado] = useState('validando');
+  const [info, setInfo] = useState(null);
+  const [form, setForm] = useState({ password: '', confirmar: '' });
+  const [errores, setErrores] = useState({});
+  const [error, setError] = useState('');
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    if (window.location.search) window.history.replaceState(null, '', '/restablecer');
+    if (!token) {
+      setEstado('invalido');
+      return;
+    }
+    api
+      .post('/auth/restablecer/validar', { token })
+      .then((r) => {
+        setInfo(r);
+        setEstado('listo');
+      })
+      .catch((err) => {
+        setError(err.message);
+        setEstado('invalido');
+      });
+  }, [token]);
+
+  const onChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const errs = {};
+    if (!passwordSegura(form.password)) errs.password = 'Mínimo 8 caracteres y al menos un número.';
+    if (form.confirmar !== form.password) errs.confirmar = 'Las contraseñas no coinciden.';
+    setErrores(errs);
+    if (Object.keys(errs).length) return;
+    setError('');
+    setEnviando(true);
+    try {
+      await api.post('/auth/restablecer', { token, password: form.password });
+      setEstado('hecho');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  const activacion = info?.tipo === 'activacion';
+  return (
+    <AuthShell
+      titulo={activacion ? 'Bienvenido al equipo organizador' : 'Crea una contraseña nueva'}
+      texto="Usa una contraseña que no utilices en otros sitios. Al guardarla cerramos las sesiones abiertas de tu cuenta."
+    >
+      <div className="stack" style={{ '--gap': '6px' }}>
+        <h2 className="h1">{activacion ? 'Crea tu contraseña' : 'Nueva contraseña'}</h2>
+        {info && (
+          <p className="muted">
+            Cuenta: <b>{info.correo}</b>
+          </p>
+        )}
+      </div>
+
+      {estado === 'validando' && <Skeleton h={160} />}
+
+      {estado === 'invalido' && (
+        <>
+          <Alert tipo="error" titulo="Este enlace ya no sirve">
+            {error || 'El enlace está incompleto. Ábrelo directo desde el correo que te enviamos.'}
+          </Alert>
+          <Link to="/recuperar" className="btn btn--primary btn--block">
+            Pedir un enlace nuevo
+          </Link>
+        </>
+      )}
+
+      {estado === 'hecho' && (
+        <>
+          <Alert tipo="exito" titulo="Contraseña guardada">
+            Ya puedes iniciar sesión con tu nueva contraseña.
+          </Alert>
+          <Link to="/login" className="btn btn--primary btn--block">
+            Iniciar sesión
+          </Link>
+        </>
+      )}
+
+      {estado === 'listo' && (
+        <form className="stack" onSubmit={onSubmit} noValidate>
+          {error && (
+            <Alert tipo="error" titulo="No pudimos guardar">
+              {error}
+            </Alert>
+          )}
+          <Field label="Nueva contraseña" error={errores.password} hint="Mínimo 8 caracteres y al menos un número.">
+            <div className="input-icon">
+              <Lock size={17} />
+              <input className="input" type="password" name="password" autoComplete="new-password" value={form.password} onChange={onChange} required />
+            </div>
+          </Field>
+          <Field label="Confirma la contraseña" error={errores.confirmar}>
+            <div className="input-icon">
+              <Lock size={17} />
+              <input className="input" type="password" name="confirmar" autoComplete="new-password" value={form.confirmar} onChange={onChange} required />
+            </div>
+          </Field>
+          <Button type="submit" block disabled={enviando || !form.password || !form.confirmar}>
+            {enviando ? 'Guardando…' : 'Guardar contraseña'}
+          </Button>
+        </form>
+      )}
+    </AuthShell>
+  );
+}
+
+// ===== Módulo: Registro =====
 
 function validar(f) {
   const e = {};
@@ -1526,6 +1730,8 @@ export function Perfil() {
         </Link>
       </nav>
 
+      <CambiarPassword />
+
       <Button
         variant="ghost"
         icon={LogOut}
@@ -1541,5 +1747,59 @@ export function Perfil() {
         Cerrar sesión
       </Button>
     </div>
+  );
+}
+
+// ===== Módulo: Cambiar contraseña =====
+export function CambiarPassword() {
+  const { renovarSesion } = useAuth();
+  const toast = useToast();
+  const vacio = { actual: '', nueva: '', confirmar: '' };
+  const [form, setForm] = useState(vacio);
+  const [errores, setErrores] = useState({});
+  const [error, setError] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const onChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    const errs = {};
+    if (!form.actual) errs.actual = 'Escribe tu contraseña actual.';
+    if (!passwordSegura(form.nueva)) errs.nueva = 'Mínimo 8 caracteres y al menos un número.';
+    if (form.confirmar !== form.nueva) errs.confirmar = 'Las contraseñas no coinciden.';
+    setErrores(errs);
+    if (Object.keys(errs).length) return;
+    setError('');
+    setEnviando(true);
+    try {
+      renovarSesion(await api.patch('/auth/password', { actual: form.actual, nueva: form.nueva }));
+      setForm(vacio);
+      toast.exito('Contraseña actualizada', 'Cerramos tus sesiones en otros dispositivos.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  };
+  return (
+    <form className="card stack" style={{ marginTop: 16, padding: 24 }} onSubmit={onSubmit} noValidate>
+      <h2 className="h3">Cambiar contraseña</h2>
+      {error && (
+        <Alert tipo="error" titulo="No pudimos cambiarla">
+          {error}
+        </Alert>
+      )}
+      <Field label="Contraseña actual" error={errores.actual}>
+        <input className="input" type="password" name="actual" autoComplete="current-password" value={form.actual} onChange={onChange} />
+      </Field>
+      <Field label="Nueva contraseña" error={errores.nueva} hint="Mínimo 8 caracteres y al menos un número.">
+        <input className="input" type="password" name="nueva" autoComplete="new-password" value={form.nueva} onChange={onChange} />
+      </Field>
+      <Field label="Confirma la nueva contraseña" error={errores.confirmar}>
+        <input className="input" type="password" name="confirmar" autoComplete="new-password" value={form.confirmar} onChange={onChange} />
+      </Field>
+      <Button type="submit" icon={Lock} disabled={enviando}>
+        {enviando ? 'Guardando…' : 'Guardar contraseña'}
+      </Button>
+    </form>
   );
 }

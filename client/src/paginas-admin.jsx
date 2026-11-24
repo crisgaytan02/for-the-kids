@@ -29,7 +29,7 @@ import {
   UserX,
   XCircle,
 } from 'lucide-react';
-import { api, diaRelativo, fechaEtiqueta, fechaLarga, fechaTabla, haceCuanto, iniciales, numero, useAuth, useFetch } from './core';
+import { api, descargarArchivo, diaRelativo, fechaEtiqueta, fechaLarga, fechaTabla, haceCuanto, iniciales, numero, useAuth, useFetch } from './core';
 import {
   Alert,
   Badge,
@@ -342,6 +342,17 @@ export function EventosAdmin() {
   const [q, setQ] = useState('');
   const { data, cargando, recargar } = useFetch(`/eventos/admin/todos?estado=${estado}&q=${encodeURIComponent(q)}`);
   const [baja, setBaja] = useState(null);
+  const [descargando, setDescargando] = useState(null);
+  const bajarLista = async (evento) => {
+    setDescargando(evento.id);
+    try {
+      await descargarArchivo(`/eventos/${evento.id}/asistentes/pdf`, `asistentes-${evento.fecha}-${evento.id}.pdf`);
+    } catch (e) {
+      toast.error('No se pudo descargar la lista', e.message);
+    } finally {
+      setDescargando(null);
+    }
+  };
   const darDeBaja = async () => {
     try {
       const r = await api.del(`/eventos/${baja.id}`);
@@ -466,6 +477,19 @@ export function EventosAdmin() {
                           aria-label={`Editar ${e.nombre}`}
                         >
                           <Pencil size={15} />
+                        </button>
+                        <button
+                          className="icon-btn"
+                          style={{
+                            width: 34,
+                            height: 34,
+                          }}
+                          onClick={() => bajarLista(e)}
+                          disabled={descargando === e.id}
+                          aria-label={`Descargar lista de asistentes de ${e.nombre}`}
+                          title="Lista de asistentes imprimible (PDF)"
+                        >
+                          <FileDown size={15} />
                         </button>
                         {e.estado !== 'cancelado' && (
                           <button
@@ -1584,6 +1608,7 @@ const ICONO_NOTI = {
   donacion: HandHeart,
   cita: CalendarClock,
   donante: UserPlus,
+  admin: ShieldCheck,
 };
 
 export function Notificaciones() {
@@ -1646,6 +1671,9 @@ const TIPO_CORREO = {
   reprogramacion: 'Reprogramación',
   cancelacion: 'Cancelación',
   recordatorio: 'Recordatorio',
+  recuperacion: 'Recuperación',
+  activacion: 'Alta de admin',
+  password: 'Cambio de contraseña',
   prueba: 'Prueba',
 };
 
@@ -1701,6 +1729,16 @@ function CorreoCard() {
           <p className="tiny">
             Servidor: <b>{data.servidor || '—'}</b> · Remitente: <b>{data.remitente || '—'}</b>
           </p>
+          {Number(data.cola?.pendientes) > 0 && (
+            <Alert tipo="aviso" titulo={`${data.cola.pendientes} correo${Number(data.cola.pendientes) === 1 ? '' : 's'} en espera de reintento`}>
+              El sistema los vuelve a intentar automáticamente cada 5 minutos, hasta 5 veces.
+            </Alert>
+          )}
+          {Number(data.cola?.agotados) > 0 && (
+            <Alert tipo="error" titulo={`${data.cola.agotados} correo${Number(data.cola.agotados) === 1 ? '' : 's'} sin entregar`}>
+              Se agotaron los reintentos. Revisa la configuración SMTP.
+            </Alert>
+          )}
           <div
             className="row"
             style={{
@@ -1783,8 +1821,10 @@ function CorreoCard() {
 export function Configuracion() {
   const { usuario } = useAuth();
   const reglas = [
-    ['Sesión', 'El inicio de sesión dura 24 horas.'],
-    ['Seguridad', 'Tras 5 intentos fallidos en 10 minutos, la cuenta se bloquea 15 minutos.'],
+    ['Sesión', 'El inicio de sesión dura 24 horas y se cierra al cambiar la contraseña o el rol.'],
+    ['Seguridad', 'Tras 5 intentos fallidos en 10 minutos, la cuenta se bloquea 15 minutos. Cada intento queda en la bitácora con su IP.'],
+    ['Recuperación', 'El enlace para restablecer la contraseña vence en 60 minutos y solo funciona una vez.'],
+    ['Correos', 'Si un correo falla, se reintenta automáticamente cada 5 minutos, hasta 5 veces.'],
     ['Cancelaciones', 'Los donantes pueden cancelar o reprogramar hasta 12 horas antes.'],
     ['Folios', 'Cada cita genera un folio único de 8 caracteres.'],
     ['Recordatorios', 'Se envía un correo entre 20 y 24 horas antes de cada cita.'],
@@ -1834,8 +1874,222 @@ export function Configuracion() {
           </div>
           <Badge estado="programado">Administrador</Badge>
         </section>
+        <AdministradoresCard />
         <CorreoCard />
+        <AccesosCard />
       </div>
     </>
+  );
+}
+
+// ===== Módulo: Administradores =====
+const ADMIN_VACIO = { nombre: '', apellido: '', correo: '', telefono: '' };
+
+function AdministradoresCard() {
+  const toast = useToast();
+  const { usuario } = useAuth();
+  const { data, cargando, recargar } = useFetch('/admin/administradores');
+  const [form, setForm] = useState(ADMIN_VACIO);
+  const [abierto, setAbierto] = useState(false);
+  const [enviando, setEnviando] = useState(false);
+  const [error, setError] = useState('');
+  const [quitar, setQuitar] = useState(null);
+  const onChange = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+  const cerrar = () => {
+    setAbierto(false);
+    setForm(ADMIN_VACIO);
+    setError('');
+  };
+  const agregar = async (e) => {
+    e.preventDefault();
+    setError('');
+    setEnviando(true);
+    try {
+      const r = await api.post('/admin/administradores', form);
+      if (r.accion === 'promovido') toast.exito('Acceso otorgado', 'Ya tenía cuenta: la próxima vez que entre verá el panel.');
+      else if (r.correo_enviado) toast.exito('Invitación enviada', 'Le llegó un correo para crear su contraseña (vence en 48 horas).');
+      else toast.info('Cuenta creada', 'El correo se simuló porque SMTP no está configurado; el enlace aparece en la terminal del servidor.');
+      cerrar();
+      recargar();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setEnviando(false);
+    }
+  };
+  const confirmarQuitar = async () => {
+    try {
+      await api.patch(`/admin/administradores/${quitar.id}/quitar`);
+      toast.exito('Acceso retirado', `${quitar.nombre} vuelve a ser donante y su sesión se cerró.`);
+      setQuitar(null);
+      recargar();
+    } catch (err) {
+      toast.error('No se pudo quitar el acceso', err.message);
+    }
+  };
+  return (
+    <section className="card stack span-all">
+      <div className="card-head">
+        <h2 className="h3">Administradores</h2>
+        <Button size="sm" icon={UserPlus} onClick={() => setAbierto(true)}>
+          Agregar administrador
+        </Button>
+      </div>
+      {cargando && !data ? (
+        <Skeleton h={120} />
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th>Correo</th>
+                <th>Último acceso</th>
+                <th>Estado</th>
+                <th>
+                  <span className="sr-only">Acciones</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.map((a) => (
+                <tr key={a.id}>
+                  <td className="cell-strong">
+                    {a.nombre} {a.apellido}
+                  </td>
+                  <td>{a.correo}</td>
+                  <td>{a.ultimo_acceso ? haceCuanto(a.ultimo_acceso) : '—'}</td>
+                  <td>{a.pendiente ? <span className="badge badge--amarillo">Invitación pendiente</span> : <span className="badge badge--verde">Activo</span>}</td>
+                  <td>
+                    {a.id !== usuario.id && (
+                      <button className="icon-btn" style={{ width: 34, height: 34 }} onClick={() => setQuitar(a)} aria-label={`Quitar acceso a ${a.nombre}`}>
+                        <UserX size={15} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <Modal open={abierto} onClose={cerrar} titulo="Agregar administrador">
+        <form className="stack" onSubmit={agregar} noValidate>
+          <p className="muted">
+            Si la persona ya tiene cuenta de donante, solo le damos acceso al panel. Si no, le enviamos un correo para que cree su contraseña.
+          </p>
+          {error && (
+            <Alert tipo="error" titulo="No se pudo agregar">
+              {error}
+            </Alert>
+          )}
+          <div className="form-grid">
+            <Field label="Nombre">
+              <input className="input" name="nombre" value={form.nombre} onChange={onChange} required />
+            </Field>
+            <Field label="Apellido">
+              <input className="input" name="apellido" value={form.apellido} onChange={onChange} />
+            </Field>
+            <Field label="Correo">
+              <input className="input" type="email" name="correo" value={form.correo} onChange={onChange} required />
+            </Field>
+            <Field label="Teléfono" hint="10 dígitos, sin lada.">
+              <input className="input" type="tel" name="telefono" value={form.telefono} onChange={onChange} required />
+            </Field>
+          </div>
+          <div className="modal__actions">
+            <Button variant="ghost" onClick={cerrar}>
+              Cancelar
+            </Button>
+            <Button type="submit" icon={UserPlus} disabled={enviando || !form.nombre || !form.correo || !form.telefono}>
+              {enviando ? 'Guardando…' : 'Dar acceso'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={Boolean(quitar)} onClose={() => setQuitar(null)} titulo="¿Quitar acceso al panel?">
+        {quitar && (
+          <>
+            <p className="muted">
+              <b>
+                {quitar.nombre} {quitar.apellido}
+              </b>{' '}
+              dejará de ver el panel administrativo y su sesión se cerrará. Su cuenta se conserva como donante.
+            </p>
+            <div className="modal__actions">
+              <Button variant="ghost" onClick={() => setQuitar(null)}>
+                Cancelar
+              </Button>
+              <Button variant="danger" icon={UserX} onClick={confirmarQuitar}>
+                Quitar acceso
+              </Button>
+            </div>
+          </>
+        )}
+      </Modal>
+    </section>
+  );
+}
+
+// ===== Módulo: Bitácora de accesos =====
+const MOTIVO_ACCESO = {
+  ok: 'Inicio de sesión',
+  password_incorrecta: 'Contraseña incorrecta',
+  correo_no_registrado: 'Correo no registrado',
+  cuenta_bloqueada: 'Intento con cuenta bloqueada',
+  bloqueo_aplicado: 'Cuenta bloqueada 15 min',
+  recuperacion_solicitada: 'Pidió recuperar contraseña',
+  recuperacion_sin_cuenta: 'Recuperación con correo inexistente',
+  password_restablecida: 'Restableció su contraseña',
+  password_cambiada: 'Cambió su contraseña',
+  cuenta_activada: 'Activó su cuenta de admin',
+};
+
+function AccesosCard() {
+  const { data, cargando, recargar } = useFetch('/admin/accesos?limite=15');
+  return (
+    <section className="card stack span-all">
+      <div className="card-head">
+        <h2 className="h3">Accesos recientes</h2>
+        <div className="row" style={{ '--gap': '8px' }}>
+          {data && <span className={`badge badge--${Number(data.fallidos_24h) ? 'amarillo' : 'verde'}`}>{data.fallidos_24h} fallidos en 24 h</span>}
+          <Button size="sm" variant="ghost" onClick={recargar}>
+            Actualizar
+          </Button>
+        </div>
+      </div>
+      {cargando && !data ? (
+        <Skeleton h={120} />
+      ) : data.accesos.length === 0 ? (
+        <p className="muted">Todavía no hay accesos registrados.</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th>Correo</th>
+                <th>Evento</th>
+                <th>IP</th>
+                <th>Resultado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.accesos.map((a) => (
+                <tr key={a.id}>
+                  <td>{new Date(a.creado_en).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                  <td>{a.correo}</td>
+                  <td>{MOTIVO_ACCESO[a.motivo] || a.motivo}</td>
+                  <td>{a.ip || '—'}</td>
+                  <td>{a.exito ? <span className="badge badge--verde">Correcto</span> : <span className="badge badge--rojo">Fallido</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }

@@ -10,7 +10,9 @@
     "build": "vite build",
     "start": "node server/index.js",
     "db:init": "node server/seed.js",
-    "test": "node --test server/api.test.js"
+    "db:migrate": "node server/migrar.js",
+    "test": "node --test --test-concurrency=1 server/api.test.js",
+    "test:cobertura": "node --test --test-concurrency=1 --experimental-test-coverage server/api.test.js"
   },
   "engines": {
     "node": ">=20.19"

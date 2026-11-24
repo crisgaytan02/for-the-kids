@@ -4,10 +4,22 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 const TOKEN_KEY = 'ftk_token';
 
 export const tokenStore = {
-  get: () => localStorage.getItem(TOKEN_KEY),
-  set: (t) => localStorage.setItem(TOKEN_KEY, t),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  get: () => sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY),
+  set: (t, recordar = true) => {
+    const destino = recordar ? localStorage : sessionStorage;
+    const otro = recordar ? sessionStorage : localStorage;
+    otro.removeItem(TOKEN_KEY);
+    destino.setItem(TOKEN_KEY, t);
+  },
+  actualizar: (t) => (sessionStorage.getItem(TOKEN_KEY) ? sessionStorage : localStorage).setItem(TOKEN_KEY, t),
+  clear: () => {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    navigator.serviceWorker?.controller?.postMessage({ tipo: 'cerrar-sesion' });
+  },
 };
+
+const SIN_CONEXION = 'Sin conexión a internet. Revisa tu señal e intenta de nuevo.';
 
 export class ApiError extends Error {
   constructor(status, message, data) {
@@ -23,11 +35,16 @@ async function request(method, url, body, opts = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const esForm = body instanceof FormData;
   if (body && !esForm) headers['Content-Type'] = 'application/json';
-  const res = await fetch(`/api${url}`, {
-    method,
-    headers,
-    body: body ? (esForm ? body : JSON.stringify(body)) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`/api${url}`, {
+      method,
+      headers,
+      body: body ? (esForm ? body : JSON.stringify(body)) : undefined,
+    });
+  } catch {
+    throw new ApiError(0, SIN_CONEXION);
+  }
   if (opts.raw) {
     if (!res.ok) {
       const err = await res.json().catch(() => null);
@@ -54,6 +71,18 @@ export const api = {
   del: (url) => request('DELETE', url),
 };
 
+export async function descargarArchivo(url, nombre) {
+  const res = await request('GET', url, null, { raw: true });
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 // ===== Módulo: Sesión =====
 const AuthContext = createContext(null);
 
@@ -73,21 +102,25 @@ export function AuthProvider({ children }) {
     window.addEventListener('ftk:logout', salir);
     return () => window.removeEventListener('ftk:logout', salir);
   }, []);
-  const entrar = useCallback(({ token, usuario }) => {
-    tokenStore.set(token);
+  const entrar = useCallback(({ token, usuario }, recordar = true) => {
+    tokenStore.set(token, recordar);
     setUsuario(usuario);
   }, []);
   const login = useCallback(
-    async (correo, password) => {
+    async (correo, password, recordar = true) => {
       const data = await api.post('/auth/login', {
         correo,
         password,
       });
-      entrar(data);
+      entrar(data, recordar);
       return data.usuario;
     },
     [entrar]
   );
+  const renovarSesion = useCallback(({ token, usuario }) => {
+    tokenStore.actualizar(token);
+    setUsuario(usuario);
+  }, []);
   const registro = useCallback(
     async (datos) => {
       const data = await api.post('/auth/registro', datos);
@@ -107,9 +140,10 @@ export function AuthProvider({ children }) {
       login,
       registro,
       logout,
+      renovarSesion,
       esAdmin: usuario?.rol === 'administrador',
     }),
-    [usuario, cargando, login, registro, logout]
+    [usuario, cargando, login, registro, logout, renovarSesion]
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

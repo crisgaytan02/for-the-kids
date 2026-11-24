@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Info, MapPin, TriangleAlert, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Info, MapPin, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { fechaEtiqueta, mesLargo, numero } from './core';
 
 // ===== Módulo: Componentes base =====
@@ -603,6 +603,27 @@ export function AuthShell({ titulo, texto, children }) {
           {children}
         </div>
       </main>
+    </div>
+  );
+}
+
+// ===== Módulo: Aviso sin conexión =====
+export function AvisoSinConexion() {
+  const [enLinea, setEnLinea] = useState(() => navigator.onLine);
+  useEffect(() => {
+    const actualizar = () => setEnLinea(navigator.onLine);
+    window.addEventListener('online', actualizar);
+    window.addEventListener('offline', actualizar);
+    return () => {
+      window.removeEventListener('online', actualizar);
+      window.removeEventListener('offline', actualizar);
+    };
+  }, []);
+  if (enLinea) return null;
+  return (
+    <div className="sin-conexion" role="status">
+      <WifiOff size={16} aria-hidden />
+      Sin conexión: estás viendo la última información guardada. Los cambios se podrán hacer cuando vuelva la señal.
     </div>
   );
 }
