@@ -79,19 +79,21 @@ export function Metric({ icon: Icon, label, value, deltaLabel }) {
 
 export function Modal({ open, onClose, titulo, children, wide, labelledBy }) {
   const ref = useRef(null);
+  const cerrarRef = useRef(onClose);
   const id = useId();
+  cerrarRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e) => e.key === 'Escape' && onClose?.();
+    const onKey = (e) => e.key === 'Escape' && cerrarRef.current?.();
     document.addEventListener('keydown', onKey);
-    ref.current?.focus();
+    if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [open, onClose]);
+  }, [open]);
   if (!open) return null;
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
