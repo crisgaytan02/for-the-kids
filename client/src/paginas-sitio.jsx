@@ -117,15 +117,25 @@ export function Landing() {
                   <Skeleton key={i} h={300} />
                 ))}
               </div>
+            ) : !eventos?.length ? (
+              <EmptyState
+                ilustracion={<BeeHeart />}
+                titulo="Por ahora no hay eventos próximos"
+                texto="Estamos preparando las siguientes jornadas. Mientras tanto, puedes llevar tu donación a cualquiera de nuestros puntos de recolección."
+              >
+                <Link to="/puntos" className="btn btn--primary btn--sm">
+                  <MapPin size={15} /> Ver puntos de recolección
+                </Link>
+              </EmptyState>
             ) : (
               <>
                 <div className="grid-events hide-mobile">
-                  {eventos?.slice(0, 3).map((e) => (
+                  {eventos.slice(0, 3).map((e) => (
                     <EventCard key={e.id} evento={e} />
                   ))}
                 </div>
                 <div className="mobile-list only-mobile">
-                  {eventos?.slice(0, 3).map((e) => (
+                  {eventos.slice(0, 3).map((e) => (
                     <EventRow key={e.id} evento={e} />
                   ))}
                 </div>
