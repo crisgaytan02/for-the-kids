@@ -2,12 +2,22 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import app from './index.js';
+import bcrypt from 'bcryptjs';
 import { generarFolio, hashToken, nuevoToken, pool, procesarColaCorreos, query } from './core.js';
-import { ADMIN, DONANTES } from './seed.js';
-
-const [, , CORREO_DONANTE, PASS_DONANTE] = DONANTES[0];
 
 process.env.NODE_ENV = 'test';
+
+const SELLO = Date.now();
+const PASS_QA = 'PruebaQa2026';
+const CORREO_ADMIN = `qa.admin.${SELLO}@correo.com`;
+const CORREO_DONANTE = `qa.donante.${SELLO}@correo.com`;
+const fechaRelativa = (dias) => {
+  const d = new Date();
+  d.setDate(d.getDate() + dias);
+  return d.toLocaleDateString('en-CA', { timeZone: process.env.APP_TZ || 'America/Mexico_City' });
+};
+let eventoVigente;
+let eventoPasado;
 let server;
 let base;
 
@@ -32,15 +42,41 @@ let tokenNuevo;
 before(async () => {
   server = app.listen(0);
   base = `http://localhost:${server.address().port}/api`;
-  tokenAdmin = (await api('POST', '/auth/login', { body: { correo: ADMIN.correo, password: ADMIN.password } })).data.token;
-  tokenMaria = (await api('POST', '/auth/login', { body: { correo: CORREO_DONANTE, password: PASS_DONANTE } })).data.token;
+  const hash = await bcrypt.hash(PASS_QA, 10);
+  const crearUsuario = async (correo, rol) =>
+    (
+      await query(
+        `INSERT INTO usuarios (nombre, apellido, correo, telefono, password_hash, rol, consentimiento_en)
+         VALUES ('QA', $3, $1, '3312345678', $2, $3, NOW()) RETURNING id`,
+        [correo, hash, rol]
+      )
+    ).rows[0].id;
+  const adminId = await crearUsuario(CORREO_ADMIN, 'administrador');
+  const donanteId = await crearUsuario(CORREO_DONANTE, 'donante');
+  const crearEvento = async (nombre, fecha, estado) =>
+    (
+      await query(
+        `INSERT INTO eventos (nombre, fecha, hora_inicio, hora_fin, duracion_cita_min, capacidad_por_horario, cupo_total,
+           centro, direccion, ciudad, estado, creado_por)
+         VALUES ($1,$2,'08:00','12:00',30,5,50,'QA','QA','QA',$3,$4) RETURNING id`,
+        [nombre, fecha, estado, adminId]
+      )
+    ).rows[0].id;
+  eventoVigente = await crearEvento('QA vigente', fechaRelativa(30), 'activo');
+  eventoPasado = await crearEvento('QA pasado', fechaRelativa(-10), 'finalizado');
+  await query(`INSERT INTO citas (folio, usuario_id, evento_id, hora) VALUES ($1,$2,$3,'09:00')`, [generarFolio(), donanteId, eventoVigente]);
+
+  tokenAdmin = (await api('POST', '/auth/login', { body: { correo: CORREO_ADMIN, password: PASS_QA } })).data.token;
+  tokenMaria = (await api('POST', '/auth/login', { body: { correo: CORREO_DONANTE, password: PASS_QA } })).data.token;
+  assert.ok(tokenAdmin && tokenMaria, 'No se pudieron crear las cuentas de prueba');
 });
 
 after(async () => {
   await query('DELETE FROM log_accesos WHERE correo LIKE $1', ['qa.%']);
   await query('DELETE FROM cola_correos WHERE para LIKE $1', ['qa.%']);
-  await query('DELETE FROM usuarios WHERE correo LIKE $1', ['qa.%']);
+  await query('DELETE FROM log_correos WHERE destinatario LIKE $1', ['qa.%']);
   await query(`DELETE FROM eventos WHERE nombre LIKE 'QA %'`);
+  await query('DELETE FROM usuarios WHERE correo LIKE $1', ['qa.%']);
   await query(`DELETE FROM notificaciones WHERE mensaje LIKE '%QA%'`);
   server.close();
   await pool.end();
@@ -160,7 +196,7 @@ test('RF-13 el reporte rechaza rangos de más de 90 días', async () => {
 const citaDeEventoPasado = async () => {
   const {
     rows: [ev],
-  } = await query(`SELECT id, to_char(hora_inicio, 'HH24:MI') AS hora FROM eventos WHERE fecha < CURRENT_DATE ORDER BY fecha DESC LIMIT 1`);
+  } = await query(`SELECT id, to_char(hora_inicio, 'HH24:MI') AS hora FROM eventos WHERE id = $1`, [eventoPasado]);
   const {
     rows: [u],
   } = await query(`SELECT id FROM usuarios WHERE correo = $1`, [correoNuevo]);
@@ -194,7 +230,7 @@ test('RF-10 solo acepta cabello de 20 a 35 cm y la donación queda ligada a la c
 
 test('RF-08 agendar, reprogramar y cancelar dejan registro de correo', async () => {
   const { data: eventos } = await api('GET', '/eventos');
-  const ev = eventos[eventos.length - 1];
+  const ev = eventos.find((e) => e.id === eventoVigente);
   const { data: detalle } = await api('GET', `/eventos/${ev.id}`);
   const libres = detalle.horarios.filter((h) => h.disponibles > 0);
   const antes = (await query('SELECT COUNT(*) AS n FROM log_correos')).rows[0].n;
@@ -372,8 +408,7 @@ test('RF-07 cancelar dos veces la misma cita responde 409', async () => {
 });
 
 test('Evento: la lista de asistentes se descarga en PDF y solo la baja el admin', async () => {
-  const { data: eventos } = await api('GET', '/eventos');
-  const ruta = `${base}/eventos/${eventos[0].id}/asistentes/pdf`;
+  const ruta = `${base}/eventos/${eventoVigente}/asistentes/pdf`;
   const ok = await fetch(ruta, { headers: { Authorization: `Bearer ${tokenAdmin}` } });
   assert.equal(ok.status, 200);
   assert.match(ok.headers.get('content-type'), /application\/pdf/);
