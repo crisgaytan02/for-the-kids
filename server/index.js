@@ -61,9 +61,16 @@ async function montarFrontend(desarrollo) {
     return;
   }
   const dist = path.join(clientDir, 'dist');
-  if (!fs.existsSync(dist)) {
-    console.warn('No existe client/dist. Corre "npm run build" o usa "npm run dev".');
-    return;
+  if (!fs.existsSync(path.join(dist, 'index.html'))) {
+    console.log('No existe client/dist: compilando la página...');
+    try {
+      const { build } = await import('vite');
+      await build({ configFile: path.join(ROOT_DIR, 'vite.config.js'), logLevel: 'warn' });
+      console.log('Página compilada.');
+    } catch (err) {
+      console.error(`No se pudo compilar la página: ${err.message}`);
+      return;
+    }
   }
   app.use(express.static(dist, { redirect: false }));
   app.get(/^\/(?!api|uploads).*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
