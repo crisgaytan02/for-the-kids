@@ -1,7 +1,7 @@
 // ===== Módulo: Pruebas de integración =====
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import app from './index.js';
+import app from './app.js';
 import bcrypt from 'bcryptjs';
 import { generarFolio, hashToken, nuevoToken, pool, procesarColaCorreos, query } from './core.js';
 
