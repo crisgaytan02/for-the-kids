@@ -142,9 +142,10 @@ Las cuentas que se registren desde la página sí reciben el correo normal.
 ## Pruebas
 
 ```bash
-npm run db:init   # las pruebas usan los datos del seed
 npm test
 ```
+
+Las pruebas crean su propio administrador, donante y eventos (todos con prefijo `qa.` / `QA`) y los borran al terminar, así que se pueden correr sobre cualquier base sin depender del seed ni de la contraseña del `.env`. Los correos de las pruebas siempre se simulan.
 
 Son 26 pruebas de integración que llaman directo a la API y validan los criterios medibles del SRS (concurrencia de cupo, rango de 20 a 35 cm, registro de correos) y las mejoras de la versión 2: recuperación y cambio de contraseña, alta de administradores, bitácora de accesos, límite por IP, cola de reintentos de correo y lista de asistentes en PDF. `npm run test:cobertura` muestra además la cobertura.
 
