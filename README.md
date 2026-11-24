@@ -42,7 +42,8 @@ for-the-kids/
 │       ├── paginas-admin.jsx # dashboard, eventos, citas, donaciones, donantes, puntos, notificaciones, configuración
 │       └── estilos.css
 └── server/
-    ├── index.js          # arranque del servidor (API + página)
+    ├── index.js          # arranque: siempre levanta el servidor (lo usan npm start y Hostinger)
+    ├── app.js            # la aplicación Express (API + página); las pruebas la importan sin arrancar
     ├── core.js           # configuración, BD, validaciones, sesión, correos, recordatorios y PDF
     ├── api.js            # todas las rutas de la API
     ├── schema.sql        # tablas de la base de datos (se puede correr varias veces sin borrar nada)
