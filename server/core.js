@@ -537,12 +537,12 @@ export function iniciarRecordatorios() {
   const reintentar = () => procesarColaCorreos().catch((err) => console.error('Cola de correos:', err.message));
   const limpiar = () =>
     query(`DELETE FROM tokens_recuperacion WHERE expira_en < NOW() - interval '7 days'`).catch((err) => console.error('Limpieza de enlaces:', err.message));
-  cron.schedule('*/15 * * * *', correr);
-  cron.schedule('*/5 * * * *', reintentar);
-  cron.schedule('30 3 * * *', limpiar);
+  cron.schedule('*/15 * * * *', () => void correr());
+  cron.schedule('*/5 * * * *', () => void reintentar());
+  cron.schedule('30 3 * * *', () => void limpiar());
   setTimeout(() => {
-    correr();
-    reintentar();
+    void correr();
+    void reintentar();
   }, 5000);
   console.log('Recordatorios activos (revisa cada 15 minutos) y reintentos de correo cada 5 minutos');
 }

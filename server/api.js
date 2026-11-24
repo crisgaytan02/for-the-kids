@@ -57,6 +57,8 @@ const firmarToken = (u) =>
 
 const filtrar = (body, campos) => Object.fromEntries(campos.filter((c) => body[c] !== undefined).map((c) => [c, body[c]]));
 
+const avisarFallo = (err) => console.error(`Tarea en segundo plano: ${err.message}`);
+
 const texto = (valor) => (typeof valor === 'string' ? valor.trim() : '');
 
 function validarDatosPersona({ nombre, correo, telefono }) {
@@ -211,10 +213,10 @@ api.post(
     } = await query('SELECT id, nombre, correo FROM usuarios WHERE correo = $1', [correo]);
     if (u) {
       const url = await withTransaction((client) => crearEnlace(client, u.id, 'recuperacion'));
-      correoRecuperacion(u, url);
-      registrarAcceso(correo, u.id, req.ip, true, 'recuperacion_solicitada');
+      correoRecuperacion(u, url).catch(avisarFallo);
+      registrarAcceso(correo, u.id, req.ip, true, 'recuperacion_solicitada').catch(avisarFallo);
     } else {
-      registrarAcceso(correo, null, req.ip, false, 'recuperacion_sin_cuenta');
+      registrarAcceso(correo, null, req.ip, false, 'recuperacion_sin_cuenta').catch(avisarFallo);
     }
     res.json({
       ok: true,
@@ -252,8 +254,8 @@ api.post(
       );
       return { ...rows[0], tipo: enlace.tipo };
     });
-    registrarAcceso(usuario.correo, usuario.id, req.ip, true, usuario.tipo === 'activacion' ? 'cuenta_activada' : 'password_restablecida');
-    if (usuario.tipo === 'recuperacion') correoPasswordCambiada(usuario);
+    registrarAcceso(usuario.correo, usuario.id, req.ip, true, usuario.tipo === 'activacion' ? 'cuenta_activada' : 'password_restablecida').catch(avisarFallo);
+    if (usuario.tipo === 'recuperacion') correoPasswordCambiada(usuario).catch(avisarFallo);
     res.json({ ok: true, mensaje: 'Listo, ya puedes iniciar sesión con tu nueva contraseña.' });
   })
 );
@@ -277,8 +279,8 @@ api.patch(
       u.id,
       await bcrypt.hash(nueva, 10),
     ]);
-    registrarAcceso(u.correo, u.id, req.ip, true, 'password_cambiada');
-    correoPasswordCambiada(actualizado);
+    registrarAcceso(u.correo, u.id, req.ip, true, 'password_cambiada').catch(avisarFallo);
+    correoPasswordCambiada(actualizado).catch(avisarFallo);
     res.json({ token: firmarToken(actualizado), usuario: publico(actualizado) });
   })
 );
@@ -472,7 +474,7 @@ api.delete(
       await client.query(`UPDATE citas SET estado = 'cancelada', cancelado_en = NOW() WHERE evento_id = $1 AND estado = 'activa'`, [id]);
       return { accion: 'cancelado', afectadas };
     });
-    resultado.afectadas.forEach((cita) => correoCancelacion({ ...cita, estado: 'cancelada' }, 'evento'));
+    resultado.afectadas.forEach((cita) => correoCancelacion({ ...cita, estado: 'cancelada' }, 'evento').catch(avisarFallo));
     if (resultado.accion === 'eliminado') return res.json({ ok: true, accion: 'eliminado' });
     res.json({ ok: true, accion: 'cancelado', avisados: resultado.afectadas.length });
   })
@@ -665,7 +667,7 @@ api.post(
 
     const cita = await obtenerCita(citaId);
     await notificar('cita', `Nueva cita de ${cita.usuario_nombre} · ${cita.evento_nombre}`);
-    correoConfirmacion(cita);
+    correoConfirmacion(cita).catch(avisarFallo);
     res.status(201).json(cita);
   })
 );
@@ -688,7 +690,7 @@ api.patch(
     if (!r.rowCount) throw new HttpError(409, 'Esa cita ya no está activa.');
     await notificar('cita', `Cita cancelada · ${cita.usuario_nombre} (${cita.folio})`);
     const actualizada = await obtenerCita(cita.id);
-    correoCancelacion(actualizada, esAdmin ? 'administrador' : 'donante');
+    correoCancelacion(actualizada, esAdmin ? 'administrador' : 'donante').catch(avisarFallo);
     res.json(actualizada);
   })
 );
@@ -706,7 +708,7 @@ api.patch(
     });
     await notificar('cita', `Cita reprogramada · ${cita.usuario_nombre} a las ${hora.slice(0, 5)}`);
     const actualizada = await obtenerCita(cita.id);
-    correoReprogramacion(actualizada);
+    correoReprogramacion(actualizada).catch(avisarFallo);
     res.json(actualizada);
   })
 );

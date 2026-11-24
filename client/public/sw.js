@@ -25,6 +25,8 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
+  const origen = event.origin || (event.source?.url ? new URL(event.source.url).origin : '');
+  if (origen !== self.location.origin) return;
   if (event.data?.tipo === 'cerrar-sesion') event.waitUntil(caches.delete(CACHE_API));
 });
 
